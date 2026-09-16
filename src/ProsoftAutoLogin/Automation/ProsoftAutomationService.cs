@@ -1834,7 +1834,13 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         VendorCsvRecord? vendorRow;
         try
         {
-            vendorRow = VendorCsvReader.ReadFirstVendor(effectivePath, vOptions.VendorNameColumn, vOptions.VendorCodeColumn);
+            vendorRow = VendorCsvReader.ReadFirstVendor(
+                effectivePath,
+                vOptions.VendorNameColumn,
+                vOptions.VendorCodeColumn,
+                vOptions.DocumentNumberColumn,
+                vOptions.TaxInvoiceNumberColumn,
+                vOptions.DeliveryOrderNumberColumn);
         }
         catch (Exception ex)
         {
@@ -1927,8 +1933,8 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             return fillResult;
         }
 
-        Report(progress, $"กรอกผู้ขาย '{targetVendorName}' สำเร็จ กำลังสลับไปแท็บ More...");
-        await Task.Delay(400, cancellationToken);
+        Report(progress, $"กรอกผู้ขาย '{targetVendorName}' สำเร็จ...");
+        await Task.Delay(300, cancellationToken);
 
         // Ensure Credit Purchase window is focused and update bounds
         if (childHwnd != IntPtr.Zero)
@@ -1953,8 +1959,24 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         {
             Report(progress, "กำหนดรหัสกลุ่มภาษีเป็น NOVAT สำเร็จ");
         }
+        await Task.Delay(300, cancellationToken);
 
-        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' จาก CSV และกำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) สำเร็จ";
+        // Ensure Credit Purchase window is focused and update bounds before filling doc fields
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.GetWindowRect(childHwnd, out childRect);
+            Win32Native.SetForegroundWindow(mainWindowHandle);
+            Win32Native.SetForegroundWindow(childHwnd);
+        }
+
+        // Step 7: Fill Document Fields (เลขที่เอกสาร, เลขที่ใบกำกับ, เลขที่ใบส่งของ)
+        await FillDocumentFieldsAsync(childHwnd, childRect, vendorRow, progress, cancellationToken);
+        await Task.Delay(300, cancellationToken);
+
+        var docInfo = string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ? "" : $", เลขที่เอกสาร: {vendorRow.DocumentNumber}";
+        var invInfo = string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber) ? "" : $", เลขที่ใบกำกับ: {vendorRow.TaxInvoiceNumber}";
+        var doInfo = string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber) ? "" : $", เลขที่ใบส่งของ: {vendorRow.DeliveryOrderNumber}";
+        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' กำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) และกรอกข้อมูลเอกสาร{docInfo}{invInfo}{doInfo} สำเร็จ";
         Report(progress, finalMsg);
         return VendorFillResult.Success(finalMsg, targetVendorName);
     }
@@ -2338,6 +2360,114 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         FileLogger.Log("[OperateVendorSearch] Find dialog did not close within timeout.");
         return VendorFillResult.Error($"ค้นหาผู้ขาย '{targetVendorName}' แล้ว แต่หน้าต่างค้นหาไม่ปิดลง (อาจไม่พบชื่อผู้ขายนี้ในระบบ Prosoft หรือเกิดข้อผิดพลาดในการเลือกรายการ)");
+    }
+
+    private async Task<bool> FillDocumentFieldsAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        VendorCsvRecord vendorRow,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        bool hasAnyDocField = !string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ||
+                              !string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber) ||
+                              !string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber);
+
+        if (!hasAnyDocField)
+        {
+            FileLogger.Log("[FillDocFields] No document number fields provided in CSV record.");
+            return true;
+        }
+
+        Report(progress, "กำลังกรอกข้อมูลเอกสาร (เลขที่เอกสาร, เลขที่ใบกำกับ, เลขที่ใบส่งของ)...");
+        FileLogger.Log($"[FillDocFields] Filling fields: DocNo='{vendorRow.DocumentNumber}', TaxInvoice='{vendorRow.TaxInvoiceNumber}', DO='{vendorRow.DeliveryOrderNumber}'");
+
+        // Determine coordinates (visual detector or verified proportional layout)
+        var loc = CreditPurchaseDocDetector.GetDefaultDocFieldLocations(childRect);
+        int docX = loc.DocNumber.X;
+        int docY = loc.DocNumber.Y;
+        int taxX = loc.TaxInvoice.X;
+        int taxY = loc.TaxInvoice.Y;
+        int doX = loc.DeliveryOrder.X;
+        int doY = loc.DeliveryOrder.Y;
+
+        // Visual detection scan if possible
+        try
+        {
+            int scanX = childRect.Left + 420;
+            int scanY = childRect.Top + 50;
+            int scanW = Math.Min(220, childRect.Right - scanX);
+            int scanH = Math.Min(90, childRect.Bottom - scanY);
+            if (scanW > 120 && scanH > 60)
+            {
+                using var scanBmp = new System.Drawing.Bitmap(scanW, scanH);
+                using (var g = System.Drawing.Graphics.FromImage(scanBmp))
+                {
+                    g.CopyFromScreen(scanX, scanY, 0, 0, new System.Drawing.Size(scanW, scanH));
+                }
+                var detected = CreditPurchaseDocDetector.FindDocFieldsInBitmap(scanBmp, scanX, scanY);
+                if (detected != null)
+                {
+                    docX = detected.DocNumber.X;
+                    docY = detected.DocNumber.Y;
+                    taxX = detected.TaxInvoice.X;
+                    taxY = detected.TaxInvoice.Y;
+                    doX = detected.DeliveryOrder.X;
+                    doY = detected.DeliveryOrder.Y;
+                    FileLogger.Log($"[FillDocFields] Visually detected doc fields: Doc=({docX},{docY}), TaxInv=({taxX},{taxY}), DO=({doX},{doY})");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLogger.Log($"[FillDocFields] Visual scan notice: {ex.Message}");
+        }
+
+        // 1. เลขที่เอกสาร (Document No)
+        if (!string.IsNullOrWhiteSpace(vendorRow.DocumentNumber))
+        {
+            FileLogger.Log($"[FillDocFields] Setting 'เลขที่เอกสาร' = '{vendorRow.DocumentNumber}' at ({docX}, {docY})...");
+            await SetFieldTextSafeAsync(docX, docY, vendorRow.DocumentNumber, cancellationToken);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 2. เลขที่ใบกำกับ (Tax Invoice No)
+        if (!string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber))
+        {
+            FileLogger.Log($"[FillDocFields] Setting 'เลขที่ใบกำกับ' = '{vendorRow.TaxInvoiceNumber}' at ({taxX}, {taxY})...");
+            await SetFieldTextSafeAsync(taxX, taxY, vendorRow.TaxInvoiceNumber, cancellationToken);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 3. เลขที่ใบส่งของ (Delivery Order No)
+        if (!string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber))
+        {
+            FileLogger.Log($"[FillDocFields] Setting 'เลขที่ใบส่งของ' = '{vendorRow.DeliveryOrderNumber}' at ({doX}, {doY})...");
+            await SetFieldTextSafeAsync(doX, doY, vendorRow.DeliveryOrderNumber, cancellationToken);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        FileLogger.Log("[FillDocFields] Document fields populated successfully.");
+        return true;
+    }
+
+    private static async Task SetFieldTextSafeAsync(int x, int y, string text, CancellationToken cancellationToken)
+    {
+        // Click inside edit box to focus
+        await Win32Native.ClickScreenPointAsync(x, y, cancellationToken);
+        await Task.Delay(100, cancellationToken);
+
+        // Select all
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+        await Task.Delay(50, cancellationToken);
+
+        // Set text via clipboard paste
+        Win32Native.SetClipboardTextSafe(text);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
+        await Task.Delay(100, cancellationToken);
+
+        // Commit to DataWindow buffer
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_TAB, cancellationToken);
     }
 
     private async Task<bool> SwitchToMoreTabAsync(

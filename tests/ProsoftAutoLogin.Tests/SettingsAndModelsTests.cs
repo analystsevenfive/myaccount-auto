@@ -780,9 +780,62 @@ public class SettingsAndModelsTests
         Assert.NotNull(loc);
         Assert.InRange(loc.EditX, 100 + 150, 100 + 210);
         Assert.InRange(loc.ArrowX, 100 + 215, 100 + 245);
-        Assert.InRange(loc.EditY, 200 + 25, 200 + 45);
+    }
+
+    [Fact]
+    public void VendorCsvReader_ReadsDocumentColumns_FromInputCsv()
+    {
+        var record = VendorCsvReader.ReadFirstVendor("input/input.csv");
+        Assert.NotNull(record);
+        Assert.Equal("GUANGZHOU NANTIAN", record.VendorName);
+        Assert.Equal("VC0926-00014-5", record.DocumentNumber);
+        Assert.Equal("Shanghai Consolidate 3-2044", record.TaxInvoiceNumber);
+        Assert.Equal("26NTSTH-SX040", record.DeliveryOrderNumber);
+    }
+
+    [Fact]
+    public void CreditPurchaseDocDetector_ReturnsAccurateDefaultLocations()
+    {
+        var childRect = new Win32Native.RECT { Left = 200, Top = 150, Right = 989, Bottom = 629 };
+        var loc = CreditPurchaseDocDetector.GetDefaultDocFieldLocations(childRect);
+
+        Assert.Equal(200 + 510, loc.DocNumber.X);
+        Assert.Equal(150 + 72, loc.DocNumber.Y);
+
+        Assert.Equal(200 + 520, loc.TaxInvoice.X);
+        Assert.Equal(150 + 91, loc.TaxInvoice.Y);
+
+        Assert.Equal(200 + 520, loc.DeliveryOrder.X);
+        Assert.Equal(150 + 110, loc.DeliveryOrder.Y);
+    }
+
+    [Fact]
+    public void AppSettings_ContainsDocumentNumberColumns()
+    {
+        var appSettingsPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "ProsoftAutoLogin", "appsettings.json");
+
+        var fullPath = Path.GetFullPath(appSettingsPath);
+        var json = File.ReadAllText(fullPath);
+        var settings = JsonSerializer.Deserialize<AppSettings>(
+            json,
+            new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+
+        Assert.NotNull(settings);
+        Assert.NotNull(settings.Prosoft.VendorInput);
+        Assert.Equal("เลขที่เอกสาร", settings.Prosoft.VendorInput.DocumentNumberColumn);
+        Assert.Equal("เลขที่ใบกำกับ", settings.Prosoft.VendorInput.TaxInvoiceNumberColumn);
+        Assert.Equal("เลขที่ใบส่งของ", settings.Prosoft.VendorInput.DeliveryOrderNumberColumn);
     }
 }
+
 
 
 

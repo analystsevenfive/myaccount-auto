@@ -23,6 +23,9 @@ public sealed class VendorInputOptions
     public string CsvPath { get; set; } = "input/input.csv";
     public string VendorNameColumn { get; set; } = "ชื่อผู้ขาย";
     public string VendorCodeColumn { get; set; } = "รหัสผู้ขาย";
+    public string DocumentNumberColumn { get; set; } = "เลขที่เอกสาร";
+    public string TaxInvoiceNumberColumn { get; set; } = "เลขที่ใบกำกับ";
+    public string DeliveryOrderNumberColumn { get; set; } = "เลขที่ใบส่งของ";
     public string SearchByOption { get; set; } = "ชื่อผู้ขาย";
     public List<string> FindDialogTitleContains { get; set; } = ["Find", "ผู้ขาย"];
     public int TimeoutSeconds { get; set; } = 15;

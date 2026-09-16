@@ -6,7 +6,12 @@ using System.Text;
 
 namespace ProsoftAutoLogin.Data;
 
-public sealed record VendorCsvRecord(string? VendorName, string? VendorCode);
+public sealed record VendorCsvRecord(
+    string? VendorName,
+    string? VendorCode,
+    string? DocumentNumber = null,
+    string? TaxInvoiceNumber = null,
+    string? DeliveryOrderNumber = null);
 
 public static class VendorCsvReader
 {
@@ -38,7 +43,10 @@ public static class VendorCsvReader
     public static List<VendorCsvRecord> ReadAllVendors(
         string filePath,
         string nameColumn = "ชื่อผู้ขาย",
-        string codeColumn = "รหัสผู้ขาย")
+        string codeColumn = "รหัสผู้ขาย",
+        string docNoColumn = "เลขที่เอกสาร",
+        string taxInvoiceColumn = "เลขที่ใบกำกับ",
+        string deliveryOrderColumn = "เลขที่ใบส่งของ")
     {
         var resolved = ResolveCsvPath(filePath);
         if (!File.Exists(resolved))
@@ -70,6 +78,9 @@ public static class VendorCsvReader
         var headers = ParseCsvLine(lines[0]);
         int nameIndex = -1;
         int codeIndex = -1;
+        int docNoIndex = -1;
+        int taxInvoiceIndex = -1;
+        int deliveryOrderIndex = -1;
 
         for (int i = 0; i < headers.Count; i++)
         {
@@ -89,6 +100,30 @@ public static class VendorCsvReader
             {
                 codeIndex = i;
             }
+
+            if (h.Equals(docNoColumn, StringComparison.OrdinalIgnoreCase) ||
+                h.Contains("เลขที่เอกสาร", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DocNo", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DocumentNo", StringComparison.OrdinalIgnoreCase))
+            {
+                docNoIndex = i;
+            }
+
+            if (h.Equals(taxInvoiceColumn, StringComparison.OrdinalIgnoreCase) ||
+                h.Contains("เลขที่ใบกำกับ", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("TaxInvoiceNo", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("InvoiceNo", StringComparison.OrdinalIgnoreCase))
+            {
+                taxInvoiceIndex = i;
+            }
+
+            if (h.Equals(deliveryOrderColumn, StringComparison.OrdinalIgnoreCase) ||
+                h.Contains("เลขที่ใบส่งของ", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DeliveryOrderNo", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DONo", StringComparison.OrdinalIgnoreCase))
+            {
+                deliveryOrderIndex = i;
+            }
         }
 
         // If only 1 column in header and neither matched, default to column 0 as name
@@ -103,6 +138,9 @@ public static class VendorCsvReader
             var cols = ParseCsvLine(lines[row]);
             string? name = null;
             string? code = null;
+            string? docNo = null;
+            string? taxInvoice = null;
+            string? deliveryOrder = null;
 
             if (nameIndex >= 0 && nameIndex < cols.Count)
             {
@@ -112,6 +150,18 @@ public static class VendorCsvReader
             {
                 code = cols[codeIndex].Trim();
             }
+            if (docNoIndex >= 0 && docNoIndex < cols.Count)
+            {
+                docNo = cols[docNoIndex].Trim();
+            }
+            if (taxInvoiceIndex >= 0 && taxInvoiceIndex < cols.Count)
+            {
+                taxInvoice = cols[taxInvoiceIndex].Trim();
+            }
+            if (deliveryOrderIndex >= 0 && deliveryOrderIndex < cols.Count)
+            {
+                deliveryOrder = cols[deliveryOrderIndex].Trim();
+            }
 
             // Fallback: if name not set but column 0 exists
             if (string.IsNullOrWhiteSpace(name) && cols.Count > 0 && nameIndex == -1)
@@ -119,9 +169,13 @@ public static class VendorCsvReader
                 name = cols[0].Trim();
             }
 
-            if (!string.IsNullOrWhiteSpace(name) || !string.IsNullOrWhiteSpace(code))
+            if (!string.IsNullOrWhiteSpace(name) ||
+                !string.IsNullOrWhiteSpace(code) ||
+                !string.IsNullOrWhiteSpace(docNo) ||
+                !string.IsNullOrWhiteSpace(taxInvoice) ||
+                !string.IsNullOrWhiteSpace(deliveryOrder))
             {
-                results.Add(new VendorCsvRecord(name, code));
+                results.Add(new VendorCsvRecord(name, code, docNo, taxInvoice, deliveryOrder));
             }
         }
 
@@ -131,9 +185,12 @@ public static class VendorCsvReader
     public static VendorCsvRecord? ReadFirstVendor(
         string filePath,
         string nameColumn = "ชื่อผู้ขาย",
-        string codeColumn = "รหัสผู้ขาย")
+        string codeColumn = "รหัสผู้ขาย",
+        string docNoColumn = "เลขที่เอกสาร",
+        string taxInvoiceColumn = "เลขที่ใบกำกับ",
+        string deliveryOrderColumn = "เลขที่ใบส่งของ")
     {
-        var list = ReadAllVendors(filePath, nameColumn, codeColumn);
+        var list = ReadAllVendors(filePath, nameColumn, codeColumn, docNoColumn, taxInvoiceColumn, deliveryOrderColumn);
         return list.FirstOrDefault();
     }
 
