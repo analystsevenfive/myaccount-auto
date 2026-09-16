@@ -1,0 +1,33 @@
+## Build Results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+**/[Bb]in/
+**/[Oo]bj/
+
+## Visual Studio / IDE
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Logs and test results
+[Ll]ogs/
+**/[Ll]ogs/
+*.log
+[Tt]est[Rr]esults/
+**/[Tt]est[Rr]esults/
+
+## Credentials & Secrets
+secrets*.json
+*.pfx
+*.snk
+
+## Publish
+publish/
+**/publish/
