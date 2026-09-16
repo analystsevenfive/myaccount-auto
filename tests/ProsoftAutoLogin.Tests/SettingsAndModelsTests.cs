@@ -834,6 +834,88 @@ public class SettingsAndModelsTests
         Assert.Equal("เลขที่ใบกำกับ", settings.Prosoft.VendorInput.TaxInvoiceNumberColumn);
         Assert.Equal("เลขที่ใบส่งของ", settings.Prosoft.VendorInput.DeliveryOrderNumberColumn);
     }
+
+    [Fact]
+    public void VendorCsvReader_ReadsDetailItems_FromInputCsv()
+    {
+        var record = VendorCsvReader.ReadFirstVendor("input/input.csv");
+        Assert.NotNull(record);
+        Assert.Equal("GUANGZHOU NANTIAN", record.VendorName);
+        Assert.Equal("VC0926-00014-5", record.DocumentNumber);
+        Assert.Equal("Shanghai Consolidate 3-2044", record.TaxInvoiceNumber);
+        Assert.Equal("26NTSTH-SX040", record.DeliveryOrderNumber);
+
+        Assert.NotNull(record.Items);
+        Assert.Equal(2, record.Items.Count);
+
+        Assert.Equal("NTS1-CD-111-9L", record.Items[0].ItemCode);
+        Assert.Equal("20", record.Items[0].Quantity);
+        Assert.Equal("205.68", record.Items[0].UnitPrice);
+
+        Assert.Equal("NTS1-HLCR2C-W-OHD", record.Items[1].ItemCode);
+        Assert.Equal("5", record.Items[1].Quantity);
+        Assert.Equal("259.52", record.Items[1].UnitPrice);
+    }
+
+    [Fact]
+    public void CreditPurchaseDetailDetector_CalculatesCoordinatesAccurately()
+    {
+        var childRect = new Win32Native.RECT { Left = 100, Top = 50, Right = 889, Bottom = 529 };
+
+        // Detail Tab button location
+        var tabPt = CreditPurchaseDetailDetector.GetDefaultDetailTabLocation(childRect);
+        Assert.Equal(100 + 45, tabPt.X);
+        Assert.Equal(529 - 20, tabPt.Y);
+
+        // Row 1 cells
+        var r1Code = CreditPurchaseDetailDetector.GetCellLocation(childRect, 1, DetailColumn.ItemCode);
+        Assert.Equal(100 + 70, r1Code.X);
+        Assert.Equal(50 + 187, r1Code.Y);
+
+        var r1Qty = CreditPurchaseDetailDetector.GetCellLocation(childRect, 1, DetailColumn.Quantity);
+        Assert.Equal(100 + 484, r1Qty.X);
+        Assert.Equal(50 + 187, r1Qty.Y);
+
+        var r1Price = CreditPurchaseDetailDetector.GetCellLocation(childRect, 1, DetailColumn.UnitPrice);
+        Assert.Equal(100 + 560, r1Price.X);
+        Assert.Equal(50 + 187, r1Price.Y);
+
+        // Row 2 cells (pitch 16px)
+        var r2Code = CreditPurchaseDetailDetector.GetCellLocation(childRect, 2, DetailColumn.ItemCode);
+        Assert.Equal(100 + 70, r2Code.X);
+        Assert.Equal(50 + 187 + 16, r2Code.Y);
+
+        var r2Qty = CreditPurchaseDetailDetector.GetCellLocation(childRect, 2, DetailColumn.Quantity);
+        Assert.Equal(100 + 484, r2Qty.X);
+        Assert.Equal(50 + 187 + 16, r2Qty.Y);
+    }
+
+    [Fact]
+    public void AppSettings_ContainsDetailItemColumns()
+    {
+        var appSettingsPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "ProsoftAutoLogin", "appsettings.json");
+
+        var fullPath = Path.GetFullPath(appSettingsPath);
+        var json = File.ReadAllText(fullPath);
+        var settings = JsonSerializer.Deserialize<AppSettings>(
+            json,
+            new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+
+        Assert.NotNull(settings);
+        Assert.NotNull(settings.Prosoft.VendorInput);
+        Assert.Equal("รหัสสินค้า", settings.Prosoft.VendorInput.ItemCodeColumn);
+        Assert.Equal("จำนวน", settings.Prosoft.VendorInput.QuantityColumn);
+        Assert.Equal("ราคาต่อหน่วย", settings.Prosoft.VendorInput.UnitPriceColumn);
+        Assert.Equal("คลัง", settings.Prosoft.VendorInput.WarehouseColumn);
+    }
 }
 
 

@@ -1840,7 +1840,13 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 vOptions.VendorCodeColumn,
                 vOptions.DocumentNumberColumn,
                 vOptions.TaxInvoiceNumberColumn,
-                vOptions.DeliveryOrderNumberColumn);
+                vOptions.DeliveryOrderNumberColumn,
+                vOptions.ItemCodeColumn,
+                vOptions.QuantityColumn,
+                vOptions.UnitPriceColumn,
+                vOptions.WarehouseColumn,
+                vOptions.LocationColumn,
+                vOptions.DiscountColumn);
         }
         catch (Exception ex)
         {
@@ -1973,10 +1979,34 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         await FillDocumentFieldsAsync(childHwnd, childRect, vendorRow, progress, cancellationToken);
         await Task.Delay(300, cancellationToken);
 
+        // Step 8: Switch back to "Detail" tab and fill items
+        Report(progress, "กำลังสลับกลับไปแท็บ Detail...");
+        await SwitchToDetailTabAsync(childHwnd, childRect, purchaseElem, cancellationToken);
+        await Task.Delay(400, cancellationToken);
+
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.GetWindowRect(childHwnd, out childRect);
+            Win32Native.SetForegroundWindow(mainWindowHandle);
+            Win32Native.SetForegroundWindow(childHwnd);
+        }
+
+        if (vendorRow.Items != null && vendorRow.Items.Count > 0)
+        {
+            await FillDetailItemsAsync(childHwnd, childRect, vendorRow.Items, progress, cancellationToken);
+            await Task.Delay(300, cancellationToken);
+        }
+        else
+        {
+            FileLogger.Log("[FillDetailItems] Notice: No detail items found in CSV input file.");
+        }
+
         var docInfo = string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ? "" : $", เลขที่เอกสาร: {vendorRow.DocumentNumber}";
         var invInfo = string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber) ? "" : $", เลขที่ใบกำกับ: {vendorRow.TaxInvoiceNumber}";
         var doInfo = string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber) ? "" : $", เลขที่ใบส่งของ: {vendorRow.DeliveryOrderNumber}";
-        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' กำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) และกรอกข้อมูลเอกสาร{docInfo}{invInfo}{doInfo} สำเร็จ";
+        var itemCount = vendorRow.Items?.Count ?? 0;
+        var itemInfo = itemCount > 0 ? $", รายการสินค้า {itemCount} รายการในแท็บ Detail" : "";
+        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' กำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) กรอกเอกสาร{docInfo}{invInfo}{doInfo}{itemInfo} สำเร็จ";
         Report(progress, finalMsg);
         return VendorFillResult.Success(finalMsg, targetVendorName);
     }
@@ -2716,6 +2746,162 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         }
 
         FileLogger.Log("[SetTaxGroup] Setting 'รหัสกลุ่มภาษี' to 'NOVAT' completed.");
+        return true;
+    }
+
+    private async Task<bool> SwitchToDetailTabAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        AutomationElement? purchaseElem,
+        CancellationToken cancellationToken)
+    {
+        FileLogger.Log($"[SwitchToDetailTab] Switching to 'Detail' tab on Credit Purchase window HWND=0x{childHwnd.ToInt64():X}...");
+
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.SetForegroundWindow(childHwnd);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 1. Try FlaUI UIA TabItem
+        if (purchaseElem != null)
+        {
+            try
+            {
+                var tabItem = purchaseElem.FindFirstDescendant(cf =>
+                    cf.ByName("Detail").Or(cf.ByName("detail")));
+                if (tabItem != null)
+                {
+                    FileLogger.Log($"[SwitchToDetailTab] Found UIA Detail tab item: '{tabItem.Name}'");
+                    if (tabItem.Patterns.SelectionItem.IsSupported)
+                    {
+                        tabItem.Patterns.SelectionItem.Pattern.Select();
+                        await Task.Delay(400, cancellationToken);
+                        return true;
+                    }
+                    else
+                    {
+                        tabItem.Click();
+                        await Task.Delay(400, cancellationToken);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SwitchToDetailTab] UIA tab select notice: {ex.Message}");
+            }
+        }
+
+        // 2. Find PBTabControl32_80
+        IntPtr tabControlHwnd = IntPtr.Zero;
+        Win32Native.RECT tabRect = default;
+        Win32Native.EnumChildWindows(childHwnd, (ch, _) =>
+        {
+            var cls = Win32Native.GetClass(ch);
+            if (cls.Contains("TabControl", StringComparison.OrdinalIgnoreCase) ||
+                cls.Contains("pbtab", StringComparison.OrdinalIgnoreCase))
+            {
+                tabControlHwnd = ch;
+                Win32Native.GetWindowRect(ch, out tabRect);
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        // 3. Click on screen coordinate for Detail tab header
+        // Detail: childRect.Left + 15..88 (center = 45..51)
+        int detailX = tabControlHwnd != IntPtr.Zero ? tabRect.Left + 45 : childRect.Left + 45;
+        int detailY = tabControlHwnd != IntPtr.Zero ? tabRect.Bottom - 14 : childRect.Bottom - 52;
+
+        FileLogger.Log($"[SwitchToDetailTab] Clicking 'Detail' tab at ({detailX}, {detailY})...");
+        await Win32Native.ClickScreenPointAsync(detailX, detailY, cancellationToken);
+        await Task.Delay(250, cancellationToken);
+
+        // 4. Also send Win32 TCM_SETCURSEL / TCM_SETCURFOCUS message to tab control (index 0 = Detail)
+        if (tabControlHwnd != IntPtr.Zero)
+        {
+            FileLogger.Log("[SwitchToDetailTab] Sending TCM_SETCURSEL (index=0) to TabControl...");
+            Win32Native.SendMessage(tabControlHwnd, Win32Native.TCM_SETCURSEL, (IntPtr)0, IntPtr.Zero);
+            Win32Native.SendMessage(tabControlHwnd, Win32Native.TCM_SETCURFOCUS, (IntPtr)0, IntPtr.Zero);
+        }
+
+        await Task.Delay(400, cancellationToken);
+        return true;
+    }
+
+    private async Task<bool> FillDetailItemsAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        List<DetailItemRecord> items,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (items == null || items.Count == 0)
+        {
+            FileLogger.Log("[FillDetailItems] No detail items to fill.");
+            return true;
+        }
+
+        FileLogger.Log($"[FillDetailItems] Filling {items.Count} items in Detail grid...");
+        Report(progress, $"กำลังกรอกข้อมูลรายการสินค้าในแท็บ Detail (ทั้งหมด {items.Count} รายการ)...");
+
+        for (int i = 1; i <= items.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var item = items[i - 1];
+            FileLogger.Log($"[FillDetailItems] Row {i}/{items.Count}: ItemCode='{item.ItemCode}', Qty='{item.Quantity}', Price='{item.UnitPrice}', WH='{item.Warehouse}'");
+            Report(progress, $"กำลังกรอกสินค้าแถวที่ {i}/{items.Count}: '{item.ItemCode}'...");
+
+            // 1. Item Code (รหัสสินค้า)
+            if (!string.IsNullOrWhiteSpace(item.ItemCode))
+            {
+                var ptCode = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.ItemCode);
+                FileLogger.Log($"[FillDetailItems] Setting ItemCode '{item.ItemCode}' at ({ptCode.X}, {ptCode.Y})...");
+                await SetFieldTextSafeAsync(ptCode.X, ptCode.Y, item.ItemCode, cancellationToken);
+                await Task.Delay(200, cancellationToken);
+            }
+
+            // 2. Warehouse (คลัง) - if specified
+            if (!string.IsNullOrWhiteSpace(item.Warehouse))
+            {
+                var ptWh = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Warehouse);
+                FileLogger.Log($"[FillDetailItems] Setting Warehouse '{item.Warehouse}' at ({ptWh.X}, {ptWh.Y})...");
+                await SetFieldTextSafeAsync(ptWh.X, ptWh.Y, item.Warehouse, cancellationToken);
+                await Task.Delay(150, cancellationToken);
+            }
+
+            // 3. Quantity (จำนวน) - if specified
+            if (!string.IsNullOrWhiteSpace(item.Quantity))
+            {
+                var ptQty = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Quantity);
+                FileLogger.Log($"[FillDetailItems] Setting Quantity '{item.Quantity}' at ({ptQty.X}, {ptQty.Y})...");
+                await SetFieldTextSafeAsync(ptQty.X, ptQty.Y, item.Quantity, cancellationToken);
+                await Task.Delay(150, cancellationToken);
+            }
+
+            // 4. Unit Price (ราคาต่อหน่วย) - if specified
+            if (!string.IsNullOrWhiteSpace(item.UnitPrice))
+            {
+                var ptPrice = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.UnitPrice);
+                FileLogger.Log($"[FillDetailItems] Setting UnitPrice '{item.UnitPrice}' at ({ptPrice.X}, {ptPrice.Y})...");
+                await SetFieldTextSafeAsync(ptPrice.X, ptPrice.Y, item.UnitPrice, cancellationToken);
+                await Task.Delay(150, cancellationToken);
+            }
+
+            // 5. Discount (ส่วนลด) - if specified
+            if (!string.IsNullOrWhiteSpace(item.Discount))
+            {
+                var ptDisc = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Discount);
+                FileLogger.Log($"[FillDetailItems] Setting Discount '{item.Discount}' at ({ptDisc.X}, {ptDisc.Y})...");
+                await SetFieldTextSafeAsync(ptDisc.X, ptDisc.Y, item.Discount, cancellationToken);
+                await Task.Delay(150, cancellationToken);
+            }
+
+            await Task.Delay(150, cancellationToken);
+        }
+
+        FileLogger.Log("[FillDetailItems] All detail items filled successfully.");
         return true;
     }
 
