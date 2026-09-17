@@ -959,11 +959,11 @@ public class SettingsAndModelsTests
         // Green arrow relative anchor tests
         var greenPt = new System.Drawing.Point(605, 55);
         var r1ArrowFromGreen = CreditPurchaseGlDetector.GetDepartmentDropdownLocationFromGreenArrow(greenPt, 1);
-        Assert.Equal(605 - 186, r1ArrowFromGreen.X);
+        Assert.Equal(605 - 198, r1ArrowFromGreen.X);
         Assert.Equal(55 + 42, r1ArrowFromGreen.Y);
 
         var r1CellFromGreen = CreditPurchaseGlDetector.GetDepartmentCellLocationFromGreenArrow(greenPt, 1);
-        Assert.Equal(605 - 235, r1CellFromGreen.X);
+        Assert.Equal(605 - 260, r1CellFromGreen.X);
         Assert.Equal(55 + 42, r1CellFromGreen.Y);
 
         // Save button on bottom toolbar

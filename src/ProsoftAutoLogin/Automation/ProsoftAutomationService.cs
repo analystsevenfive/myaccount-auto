@@ -2023,6 +2023,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             _options.Gl.DefaultDepartment,
             _options.Gl.AutoSaveAfterGl,
             progress,
+            vendorRow,
             cancellationToken);
 
         var docInfo = string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ? "" : $", เลขที่เอกสาร: {vendorRow.DocumentNumber}";
@@ -3556,7 +3557,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             return VendorFillResult.Error("พบหน้าหลักของ Prosoft แต่ไม่พบหน้าต่างย่อยซื้อเชื่อ");
         }
 
-        return await ProcessGlAndSaveCoreAsync(childHwnd, childRect, purchaseElem, process, targetDept, save, progress, cancellationToken);
+        return await ProcessGlAndSaveCoreAsync(childHwnd, childRect, purchaseElem, process, targetDept, save, progress, null, cancellationToken);
     }
 
     private async Task<VendorFillResult> ProcessGlAndSaveCoreAsync(
@@ -3567,6 +3568,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         string targetDept,
         bool save,
         IProgress<string>? progress,
+        VendorCsvRecord? vendorRow,
         CancellationToken cancellationToken)
     {
         if (childHwnd != IntPtr.Zero)
@@ -3618,13 +3620,105 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         // 5. Save if enabled
         if (save)
         {
-            Report(progress, "กำลังกดปุ่ม Save เพื่อบันทึกเอกสาร...");
-            var saveResult = await ClickSaveDocumentAsync(childHwnd, childRect, purchaseElem, process, progress, cancellationToken);
-            if (!saveResult.Success)
+            int doSuffix = 1;
+            const int maxSaveRetries = 50;
+            string baseDo = vendorRow?.DeliveryOrderNumber ?? "";
+
+            // If baseDo is empty (e.g. standalone mode), read it directly from the Delivery Order field on screen
+            if (string.IsNullOrWhiteSpace(baseDo))
             {
+                try
+                {
+                    var loc = CreditPurchaseDocDetector.GetDefaultDocFieldLocations(childRect);
+                    await Win32Native.ClickScreenPointAsync(loc.DeliveryOrder.X, loc.DeliveryOrder.Y, cancellationToken);
+                    await Task.Delay(100, cancellationToken);
+                    await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+                    await Task.Delay(50, cancellationToken);
+                    await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_C, cancellationToken);
+                    await Task.Delay(100, cancellationToken);
+                    var cbText = Win32Native.GetClipboardTextSafe();
+                    if (!string.IsNullOrWhiteSpace(cbText))
+                    {
+                        baseDo = cbText.Trim();
+                        FileLogger.Log($"[SaveLoop] Read base DO from screen: '{baseDo}'");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[SaveLoop] Failed to read DO from screen: {ex.Message}");
+                }
+            }
+
+            // Always strip any existing /suffix so we increment cleanly: /1, /2, /3...
+            baseDo = System.Text.RegularExpressions.Regex.Replace(baseDo, @"/\d+$", "").Trim();
+            FileLogger.Log($"[SaveLoop] Clean base DO for duplicate loop: '{baseDo}'");
+
+            while (true)
+            {
+                Report(progress, "กำลังกดปุ่ม Save เพื่อบันทึกเอกสาร...");
+                var saveResult = await ClickSaveDocumentAsync(childHwnd, childRect, purchaseElem, process, progress, cancellationToken);
+                if (saveResult.Success)
+                {
+                    Report(progress, "บันทึกเอกสารเรียบร้อย");
+                    break;
+                }
+
+                if (saveResult.IsDuplicateDo && doSuffix <= maxSaveRetries)
+                {
+                    string candidateDo = string.IsNullOrWhiteSpace(baseDo)
+                        ? $"DO/{doSuffix}"
+                        : CreditPurchaseDocDetector.GenerateNextDeliveryOrderNumber(baseDo, doSuffix);
+
+                    Report(progress, $"ตรวจพบ '{saveResult.Message}': กำลังแก้ไขเลขที่ใบส่งของเป็น '{candidateDo}' และกด Save อีกรอบ (ครั้งที่ {doSuffix})...");
+                    FileLogger.Log($"[SaveLoop] Duplicate DO detected. Trying suffix {doSuffix}: candidate DO='{candidateDo}'...");
+
+                    // Locate Delivery Order field in the header area
+                    var loc = CreditPurchaseDocDetector.GetDefaultDocFieldLocations(childRect);
+                    int doX = loc.DeliveryOrder.X;
+                    int doY = loc.DeliveryOrder.Y;
+                    try
+                    {
+                        int scanX = childRect.Left + 420;
+                        int scanY = childRect.Top + 50;
+                        int scanW = Math.Min(220, childRect.Right - scanX);
+                        int scanH = Math.Min(90, childRect.Bottom - scanY);
+                        if (scanW > 120 && scanH > 60)
+                        {
+                            using var scanBmp = new System.Drawing.Bitmap(scanW, scanH);
+                            using (var g = System.Drawing.Graphics.FromImage(scanBmp))
+                            {
+                                g.CopyFromScreen(scanX, scanY, 0, 0, new System.Drawing.Size(scanW, scanH));
+                            }
+                            var detected = CreditPurchaseDocDetector.FindDocFieldsInBitmap(scanBmp, scanX, scanY);
+                            if (detected != null && detected.DeliveryOrder.X > 0 && detected.DeliveryOrder.Y > 0)
+                            {
+                                doX = detected.DeliveryOrder.X;
+                                doY = detected.DeliveryOrder.Y;
+                            }
+                        }
+                    }
+                    catch { }
+
+                    if (childHwnd != IntPtr.Zero)
+                    {
+                        Win32Native.SetForegroundWindow(childHwnd);
+                        Win32Native.EnsureEnglishKeyboardLayout(childHwnd);
+                        await Task.Delay(100, cancellationToken);
+                    }
+
+                    // Click into DO field, paste candidateDo, and TAB
+                    await SetFieldTextSafeAsync(doX, doY, candidateDo, cancellationToken);
+                    if (vendorRow != null)
+                    {
+                        vendorRow.DeliveryOrderNumber = candidateDo;
+                    }
+                    doSuffix++;
+                    await Task.Delay(500, cancellationToken);
+                    continue;
+                }
+
                 return VendorFillResult.Error($"กำหนดแท็บ GL (แผนก: {targetDept}, {rowsUpdated} รายการ) สำเร็จ แต่บันทึกเอกสารไม่สำเร็จ: {saveResult.Message}");
             }
-            Report(progress, "บันทึกเอกสารเรียบร้อย");
         }
 
         return VendorFillResult.Success($"กำหนดแท็บ GL (แผนก: {targetDept}, {rowsUpdated} รายการ) {(save ? "และบันทึกเอกสารเรียบร้อย" : "เรียบร้อย")}");
@@ -3936,11 +4030,13 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Setting Department to '{departmentCode}' at cell=({cellX}, {cellY}), arrow=({arrowX}, {cellY})...");
 
-        // 1. Double-click inside cell text box: activates row and selects all existing text (e.g. 'PURCHASE')
+        // 1. Double-click inside cell text box: activates row and selects all existing text
         await Win32Native.DoubleClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(200, cancellationToken);
 
-        // 2. Clear existing selected text with Backspace so cell is completely clean
+        // 2. Clear existing text with Ctrl+A + Backspace so cell is completely clean
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, 0x41, cancellationToken); // Ctrl+A
+        await Task.Delay(50, cancellationToken);
         await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
         await Task.Delay(100, cancellationToken);
 
@@ -3955,15 +4051,14 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
         await Task.Delay(200, cancellationToken);
 
-        // 5. In addition, double-click cell and paste via clipboard (Ctrl+V) and commit with Enter
-        // This guarantees 'INTER' is set even if dropdown was already closed or required direct paste
+        // 5. In addition, double-click cell and paste via clipboard (Ctrl+V) and commit with Tab
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Pasting '{departmentCode}' into cell at ({cellX}, {cellY})...");
         await Win32Native.DoubleClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(100, cancellationToken);
         Win32Native.SetClipboardTextSafe(departmentCode);
         await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
         await Task.Delay(100, cancellationToken);
-        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_TAB, cancellationToken);
         await Task.Delay(200, cancellationToken);
 
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Department '{departmentCode}' set successfully.");
@@ -4011,7 +4106,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         }
     }
 
-    private async Task<(bool Success, string Message)> ClickSaveDocumentAsync(
+    private async Task<(bool Success, bool IsDuplicateDo, string Message)> ClickSaveDocumentAsync(
         IntPtr childHwnd,
         Win32Native.RECT childRect,
         AutomationElement? purchaseElem,
@@ -4062,7 +4157,63 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         return await HandleSaveConfirmationPopupAsync(childHwnd, process, progress, cancellationToken);
     }
 
-    private async Task<(bool Success, string Message)> HandleSaveConfirmationPopupAsync(
+    private static async Task ClickDialogButtonCleanlyAsync(
+        IntPtr buttonHwnd,
+        IntPtr dialogHwnd,
+        bool isYesButton,
+        CancellationToken cancellationToken)
+    {
+        if (buttonHwnd == IntPtr.Zero) return;
+
+        if (dialogHwnd != IntPtr.Zero)
+        {
+            Win32Native.SetForegroundWindow(dialogHwnd);
+            await Task.Delay(50, cancellationToken);
+        }
+
+        Win32Native.GetWindowRect(buttonHwnd, out var bRect);
+        int bx = (bRect.Left + bRect.Right) / 2;
+        int by = (bRect.Top + bRect.Bottom) / 2;
+
+        if (bx > 0 && by > 0)
+        {
+            FileLogger.Log($"[ClickDialogButtonCleanly] Physical click on button HWND=0x{buttonHwnd.ToInt64():X} at ({bx}, {by})...");
+            await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
+        }
+        else
+        {
+            FileLogger.Log($"[ClickDialogButtonCleanly] SendMessage BM_CLICK on button HWND=0x{buttonHwnd.ToInt64():X}...");
+            Win32Native.SendMessage(buttonHwnd, (uint)Win32Native.BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        // Wait up to 500ms for dialog to close
+        for (int i = 0; i < 5; i++)
+        {
+            await Task.Delay(100, cancellationToken);
+            if (dialogHwnd == IntPtr.Zero || !Win32Native.IsWindow(dialogHwnd) || !Win32Native.IsWindowVisible(dialogHwnd))
+            {
+                FileLogger.Log($"[ClickDialogButtonCleanly] Dialog HWND=0x{dialogHwnd.ToInt64():X} closed successfully.");
+                return;
+            }
+        }
+
+        // Fallback only if dialog is still visible
+        if (Win32Native.IsWindow(dialogHwnd) && Win32Native.IsWindowVisible(dialogHwnd))
+        {
+            FileLogger.Log($"[ClickDialogButtonCleanly] Dialog still open; sending BM_CLICK to button...");
+            Win32Native.SendMessage(buttonHwnd, (uint)Win32Native.BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+            await Task.Delay(150, cancellationToken);
+
+            if (isYesButton && Win32Native.IsWindow(dialogHwnd) && Win32Native.IsWindowVisible(dialogHwnd))
+            {
+                FileLogger.Log($"[ClickDialogButtonCleanly] Dialog still open; sending WM_COMMAND IDYES (6)...");
+                Win32Native.SendMessage(dialogHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)6, buttonHwnd);
+                await Task.Delay(150, cancellationToken);
+            }
+        }
+    }
+
+    private async Task<(bool Success, bool IsDuplicateDo, string Message)> HandleSaveConfirmationPopupAsync(
         IntPtr childHwnd,
         Process process,
         IProgress<string>? progress,
@@ -4116,107 +4267,38 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 var fullPopupMsg = string.Join(" ", msgList);
                 FileLogger.Log($"[HandleSavePopup] Found popup HWND=0x{popupHwnd.ToInt64():X} Title='{popupTitle}' Message='{fullPopupMsg}'");
 
+                bool isDuplicateDo = CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(fullPopupMsg, popupTitle);
                 bool isConfirmPrompt = CreditPurchaseGlDetector.IsSaveConfirmationPrompt(fullPopupMsg, popupTitle);
                 bool isWarningOrError = CreditPurchaseGlDetector.IsSaveWarningOrError(popupTitle, fullPopupMsg);
 
                 IntPtr targetBtnHwnd = CreditPurchaseGlDetector.FindDialogButtonHwnd(popupHwnd, isConfirmPrompt);
 
-                if (isConfirmPrompt)
-                {
-                    FileLogger.Log($"[HandleSavePopup] Save confirmation prompt detected ('{fullPopupMsg}'). Clicking 'Yes' button...");
-                    Report(progress, "ตรวจพบข้อความเตือนเลขที่เอกสาร: กำลังกด 'Yes' เพื่อยืนยันการบันทึก...");
-                }
-
-                Win32Native.SetForegroundWindow(popupHwnd);
-                await Task.Delay(100, cancellationToken);
-
-                if (targetBtnHwnd != IntPtr.Zero)
-                {
-                    FileLogger.Log($"[HandleSavePopup] Clicking target button HWND=0x{targetBtnHwnd.ToInt64():X}...");
-                    Win32Native.ClickButtonHwnd(targetBtnHwnd, popupHwnd);
-
-                    Win32Native.GetWindowRect(targetBtnHwnd, out var bRect);
-                    int bx = (bRect.Left + bRect.Right) / 2;
-                    int by = (bRect.Top + bRect.Bottom) / 2;
-                    if (bx > 0 && by > 0)
-                    {
-                        await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
-                    }
-                }
-
-                if (isConfirmPrompt)
-                {
-                    // For Yes/No confirmation, send explicit WM_COMMAND IDYES (6) and 'Y' key.
-                    // DO NOT send VK_RETURN because Return triggers the dialog's default button (often 'No') or dismisses follow-up popups!
-                    try
-                    {
-                        Win32Native.SendMessage(popupHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)6, targetBtnHwnd);
-                    }
-                    catch { }
-                    await Win32Native.SendKeyPressAsync(0x59, cancellationToken); // 'Y'
-                }
-                else
-                {
-                    await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
-                }
-
-                // Wait up to 3 seconds for popup to disappear, with retries if needed
-                var dismissDeadline = DateTime.UtcNow.AddSeconds(3);
-                int retry = 0;
-                while (DateTime.UtcNow < dismissDeadline)
-                {
-                    if (!Win32Native.IsWindow(popupHwnd) || !Win32Native.IsWindowVisible(popupHwnd))
-                    {
-                        FileLogger.Log($"[HandleSavePopup] Popup HWND=0x{popupHwnd.ToInt64():X} closed successfully.");
-                        break;
-                    }
-                    await Task.Delay(150, cancellationToken);
-                    retry++;
-                    if (retry % 3 == 0 && Win32Native.IsWindowVisible(popupHwnd))
-                    {
-                        if (targetBtnHwnd != IntPtr.Zero)
-                        {
-                            Win32Native.ClickButtonHwnd(targetBtnHwnd, popupHwnd);
-                            Win32Native.GetWindowRect(targetBtnHwnd, out var bRect);
-                            int bx = (bRect.Left + bRect.Right) / 2;
-                            int by = (bRect.Top + bRect.Bottom) / 2;
-                            if (bx > 0 && by > 0)
-                            {
-                                await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
-                            }
-                        }
-                        if (isConfirmPrompt)
-                        {
-                            try
-                            {
-                                Win32Native.SendMessage(popupHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)6, targetBtnHwnd);
-                            }
-                            catch { }
-                            await Win32Native.SendKeyPressAsync(0x59, cancellationToken);
-                        }
-                        else
-                        {
-                            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
-                        }
-                    }
-                }
-
-                if (isWarningOrError)
+                if (isDuplicateDo)
                 {
                     var warnText = string.IsNullOrWhiteSpace(fullPopupMsg) ? popupTitle : $"{popupTitle}: {fullPopupMsg}";
-                    Report(progress, $"ตรวจพบข้อความเตือนจาก Prosoft: '{warnText}'");
-                    FileLogger.Log($"[HandleSavePopup] Save resulted in warning/error: {warnText}");
-                    return (false, warnText);
+                    Report(progress, $"ตรวจพบข้อความเตือน: '{warnText}'");
+                    FileLogger.Log($"[HandleSavePopup] Primary popup is Duplicate DO: {warnText}");
+                    await Task.Delay(2000, cancellationToken);
+                    if (targetBtnHwnd != IntPtr.Zero)
+                    {
+                        await ClickDialogButtonCleanlyAsync(targetBtnHwnd, popupHwnd, isYesButton: false, cancellationToken);
+                    }
+                    return (false, true, warnText);
                 }
 
                 if (isConfirmPrompt)
                 {
-                    handledConfirmationPrompt = true;
-                    Report(progress, "กดยืนยัน 'Yes' เรียบร้อย กำลังรอการบันทึก...");
-                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting up to 5s for follow-up dialog (e.g. 'บันทึกข้อมูลเรียบร้อยแล้ว')...");
+                    FileLogger.Log($"[HandleSavePopup] Save confirmation prompt detected ('{fullPopupMsg}'). Clicking 'Yes' button cleanly...");
+                    Report(progress, "ตรวจพบข้อความเตือนเลขที่เอกสาร: กำลังกด 'Yes' เพื่อยืนยันการบันทึก...");
 
-                    // Wait up to 5s for potential follow-up popup (like "คำเตือน: บันทึกเรียบร้อย")
-                    var followUpDeadline = DateTime.UtcNow.AddSeconds(5);
+                    await ClickDialogButtonCleanlyAsync(targetBtnHwnd, popupHwnd, isYesButton: true, cancellationToken);
+
+                    handledConfirmationPrompt = true;
+                    Report(progress, "กดยืนยัน 'Yes' เรียบร้อย กำลังรอผลการตรวจสอบและบันทึก...");
+                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting up to 8s for follow-up validation popup (e.g. 'เลขที่ใบส่งของ เป็นค่าซ้ำ !!')...");
+
+                    // Wait up to 8s for potential follow-up popup (like "คำเตือน: เลขที่ใบส่งของ เป็นค่าซ้ำ !!")
+                    var followUpDeadline = DateTime.UtcNow.AddSeconds(8);
                     while (DateTime.UtcNow < followUpDeadline)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -4229,6 +4311,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                             if (fpid == (uint)process.Id && Win32Native.IsWindowVisible(fh))
                             {
                                 if (fh == childHwnd) return true;
+                                if (fh == popupHwnd) return true;
                                 var fcls = Win32Native.GetClass(fh);
                                 var ftxt = Win32Native.GetText(fh);
                                 if (fcls == "#32770" && !ftxt.Equals("ซื้อเชื่อ", StringComparison.OrdinalIgnoreCase))
@@ -4260,48 +4343,74 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                             FileLogger.Log($"[HandleSavePopup] Follow-up popup HWND=0x{followHwnd.ToInt64():X} Title='{followTitle}' Message='{fullFollowMsg}'.");
                             Report(progress, $"ตรวจพบข้อความแจ้งเตือน: '{followTitle}: {fullFollowMsg}'");
 
-                            // Pause 1.5 seconds so user can clearly see the warning popup on screen
-                            await Task.Delay(1500, cancellationToken);
+                            // Crucial: Pause 2.0 seconds so user clearly sees the warning popup on screen!
+                            await Task.Delay(2000, cancellationToken);
 
-                            Win32Native.SetForegroundWindow(followHwnd);
                             IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
                             if (okBtn != IntPtr.Zero)
                             {
-                                Win32Native.ClickButtonHwnd(okBtn, followHwnd);
-                                Win32Native.GetWindowRect(okBtn, out var okRect);
-                                int okX = (okRect.Left + okRect.Right) / 2;
-                                int okY = (okRect.Top + okRect.Bottom) / 2;
-                                if (okX > 0 && okY > 0)
-                                {
-                                    await Win32Native.ClickScreenPointAsync(okX, okY, cancellationToken);
-                                }
+                                await ClickDialogButtonCleanlyAsync(okBtn, followHwnd, isYesButton: false, cancellationToken);
                             }
-                            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
                             await Task.Delay(300, cancellationToken);
-                            break;
+
+                            bool followIsDup = CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(fullFollowMsg, followTitle);
+                            if (followIsDup)
+                            {
+                                FileLogger.Log($"[HandleSavePopup] Follow-up popup was Duplicate DO: '{followTitle}: {fullFollowMsg}'.");
+                                return (false, true, $"{followTitle}: {fullFollowMsg}");
+                            }
+
+                            bool followIsError = CreditPurchaseGlDetector.IsSaveWarningOrError(followTitle, fullFollowMsg);
+                            if (followIsError)
+                            {
+                                FileLogger.Log($"[HandleSavePopup] Follow-up popup was warning/error: '{followTitle}: {fullFollowMsg}'.");
+                                return (false, false, $"{followTitle}: {fullFollowMsg}");
+                            }
+
+                            // Follow-up was an informational popup (e.g. "บันทึกเรียบร้อย")
+                            FileLogger.Log("[HandleSavePopup] Follow-up popup dismissed. Save completed.");
+                            return (true, false, "บันทึกเอกสารเรียบร้อย");
                         }
 
                         await Task.Delay(200, cancellationToken);
                     }
 
-                    FileLogger.Log("[HandleSavePopup] Save completed successfully.");
-                    return (true, "บันทึกเอกสารเรียบร้อย");
+                    FileLogger.Log("[HandleSavePopup] Save completed successfully (no subsequent error dialog after 8s).");
+                    return (true, false, "บันทึกเอกสารเรียบร้อย");
                 }
 
-                Report(progress, $"ตรวจพบ Popup บันทึก: '{popupTitle}' — ดำเนินการยืนยันเรียบร้อย");
-                return (true, "บันทึกเอกสารเรียบร้อย");
+                if (isWarningOrError)
+                {
+                    var warnText = string.IsNullOrWhiteSpace(fullPopupMsg) ? popupTitle : $"{popupTitle}: {fullPopupMsg}";
+                    Report(progress, $"ตรวจพบข้อความเตือนจาก Prosoft: '{warnText}'");
+                    FileLogger.Log($"[HandleSavePopup] Save resulted in warning/error: {warnText}");
+                    await Task.Delay(2000, cancellationToken);
+                    if (targetBtnHwnd != IntPtr.Zero)
+                    {
+                        await ClickDialogButtonCleanlyAsync(targetBtnHwnd, popupHwnd, isYesButton: false, cancellationToken);
+                    }
+                    return (false, false, warnText);
+                }
+
+                // General popup
+                if (targetBtnHwnd != IntPtr.Zero)
+                {
+                    await ClickDialogButtonCleanlyAsync(targetBtnHwnd, popupHwnd, isYesButton: false, cancellationToken);
+                }
+                Report(progress, $"ตรวจพบ Popup บันทึก: '{popupTitle}' — ดำเนินการเรียบร้อย");
+                return (true, false, "บันทึกเอกสารเรียบร้อย");
             }
 
             if (handledConfirmationPrompt)
             {
                 FileLogger.Log("[HandleSavePopup] Save confirmation prompt handled and no subsequent modal dialog detected.");
-                return (true, "บันทึกเอกสารเรียบร้อย");
+                return (true, false, "บันทึกเอกสารเรียบร้อย");
             }
 
             await Task.Delay(250, cancellationToken);
         }
 
         FileLogger.Log("[HandleSavePopup] No modal confirmation popup appeared (save completed directly).");
-        return (true, "บันทึกเอกสารเรียบร้อย");
+        return (true, false, "บันทึกเอกสารเรียบร้อย");
     }
 }

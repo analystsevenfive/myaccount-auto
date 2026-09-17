@@ -1,7 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $dotnetHome = Join-Path $HOME ".dotnet"
-if ((Test-Path (Join-Path $dotnetHome "dotnet.exe")) -and -not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+if (Test-Path (Join-Path $dotnetHome "dotnet.exe")) {
+    $env:DOTNET_ROOT = $dotnetHome
     $env:PATH = "$dotnetHome;$env:PATH"
 }
 

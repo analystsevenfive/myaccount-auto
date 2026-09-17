@@ -37,9 +37,9 @@ internal static class CreditPurchaseGlDetector
     public const int DepartmentDropdownArrowXOffset = 416;
 
     // Relative offsets from detected green arrow button [ > ]
-    public const int GreenArrowToDeptDropdownDx = -186;
+    public const int GreenArrowToDeptDropdownDx = -198;
     public const int GreenArrowToDeptDropdownDy = 42;
-    public const int GreenArrowToDeptCellDx = -235;
+    public const int GreenArrowToDeptCellDx = -260;
 
     /// <summary>
     /// Gets the click point for the "GL" tab at the bottom of the "ซื้อเชื่อ" window.

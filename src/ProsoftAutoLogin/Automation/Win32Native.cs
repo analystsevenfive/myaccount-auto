@@ -105,6 +105,7 @@ internal static class Win32Native
     public const byte VK_UP = 0x26;
     public const byte VK_DOWN = 0x28;
     public const byte VK_A = 0x41;
+    public const byte VK_C = 0x43;
     public const byte VK_N = 0x4E;
     public const byte VK_S = 0x53;
     public const byte VK_V = 0x56;
@@ -364,6 +365,30 @@ internal static class Win32Native
             thread.Join(1000);
         }
         catch { }
+    }
+
+    public static string? GetClipboardTextSafe()
+    {
+        string? text = null;
+        try
+        {
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    if (System.Windows.Clipboard.ContainsText())
+                    {
+                        text = System.Windows.Clipboard.GetText();
+                    }
+                }
+                catch { }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join(1000);
+        }
+        catch { }
+        return text;
     }
 
     [DllImport("user32.dll")]
