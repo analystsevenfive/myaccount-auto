@@ -4146,10 +4146,14 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
                 if (isConfirmPrompt)
                 {
-                    // Send 'Y' (0x59) and Enter on standard MB_YESNO dialogs
-                    await Win32Native.SendKeyPressAsync(0x59, cancellationToken);
-                    await Task.Delay(50, cancellationToken);
-                    await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+                    // For Yes/No confirmation, send explicit WM_COMMAND IDYES (6) and 'Y' key.
+                    // DO NOT send VK_RETURN because Return triggers the dialog's default button (often 'No') or dismisses follow-up popups!
+                    try
+                    {
+                        Win32Native.SendMessage(popupHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)6, targetBtnHwnd);
+                    }
+                    catch { }
+                    await Win32Native.SendKeyPressAsync(0x59, cancellationToken); // 'Y'
                 }
                 else
                 {
@@ -4173,12 +4177,27 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                         if (targetBtnHwnd != IntPtr.Zero)
                         {
                             Win32Native.ClickButtonHwnd(targetBtnHwnd, popupHwnd);
+                            Win32Native.GetWindowRect(targetBtnHwnd, out var bRect);
+                            int bx = (bRect.Left + bRect.Right) / 2;
+                            int by = (bRect.Top + bRect.Bottom) / 2;
+                            if (bx > 0 && by > 0)
+                            {
+                                await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
+                            }
                         }
                         if (isConfirmPrompt)
                         {
+                            try
+                            {
+                                Win32Native.SendMessage(popupHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)6, targetBtnHwnd);
+                            }
+                            catch { }
                             await Win32Native.SendKeyPressAsync(0x59, cancellationToken);
                         }
-                        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+                        else
+                        {
+                            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+                        }
                     }
                 }
 
@@ -4194,10 +4213,10 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 {
                     handledConfirmationPrompt = true;
                     Report(progress, "กดยืนยัน 'Yes' เรียบร้อย กำลังรอการบันทึก...");
-                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting 1.5s to see if a follow-up dialog appears...");
+                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting up to 5s for follow-up dialog (e.g. 'บันทึกข้อมูลเรียบร้อยแล้ว')...");
 
-                    // Wait 1.5s for potential follow-up popup (like "บันทึกเรียบร้อย")
-                    var followUpDeadline = DateTime.UtcNow.AddMilliseconds(1500);
+                    // Wait up to 5s for potential follow-up popup (like "คำเตือน: บันทึกเรียบร้อย")
+                    var followUpDeadline = DateTime.UtcNow.AddSeconds(5);
                     while (DateTime.UtcNow < followUpDeadline)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -4224,19 +4243,45 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
                         if (followHwnd != IntPtr.Zero)
                         {
-                            FileLogger.Log($"[HandleSavePopup] Follow-up popup HWND=0x{followHwnd.ToInt64():X} Title='{followTitle}'. Confirming with OK...");
+                            // Read message text from follow-up popup
+                            var followMsgs = new List<string>();
+                            Win32Native.EnumChildWindows(followHwnd, (fch, _) =>
+                            {
+                                var fcls = Win32Native.GetClass(fch);
+                                var ftxt = Win32Native.GetText(fch);
+                                if (fcls.Equals("Static", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(ftxt))
+                                {
+                                    followMsgs.Add(ftxt.Trim());
+                                }
+                                return true;
+                            }, IntPtr.Zero);
+                            var fullFollowMsg = string.Join(" ", followMsgs);
+
+                            FileLogger.Log($"[HandleSavePopup] Follow-up popup HWND=0x{followHwnd.ToInt64():X} Title='{followTitle}' Message='{fullFollowMsg}'.");
+                            Report(progress, $"ตรวจพบข้อความแจ้งเตือน: '{followTitle}: {fullFollowMsg}'");
+
+                            // Pause 1.5 seconds so user can clearly see the warning popup on screen
+                            await Task.Delay(1500, cancellationToken);
+
                             Win32Native.SetForegroundWindow(followHwnd);
                             IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
                             if (okBtn != IntPtr.Zero)
                             {
                                 Win32Native.ClickButtonHwnd(okBtn, followHwnd);
+                                Win32Native.GetWindowRect(okBtn, out var okRect);
+                                int okX = (okRect.Left + okRect.Right) / 2;
+                                int okY = (okRect.Top + okRect.Bottom) / 2;
+                                if (okX > 0 && okY > 0)
+                                {
+                                    await Win32Native.ClickScreenPointAsync(okX, okY, cancellationToken);
+                                }
                             }
                             await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
                             await Task.Delay(300, cancellationToken);
                             break;
                         }
 
-                        await Task.Delay(150, cancellationToken);
+                        await Task.Delay(200, cancellationToken);
                     }
 
                     FileLogger.Log("[HandleSavePopup] Save completed successfully.");
