@@ -3026,8 +3026,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var item = items[i - 1];
-            FileLogger.Log($"[FillDetailItems] Row {i}/{items.Count}: ItemCode='{item.ItemCode}', Qty='{item.Quantity}', Price='{item.UnitPrice}', WH='{item.Warehouse}'");
-            Report(progress, $"กำลังกรอกสินค้าแถวที่ {i}/{items.Count}: '{item.ItemCode}'...");
+            var wh = !string.IsNullOrWhiteSpace(item.Warehouse) ? item.Warehouse : (_options.VendorInput.DefaultWarehouse ?? "BK");
+            var loc = !string.IsNullOrWhiteSpace(item.Location) ? item.Location : (_options.VendorInput.DefaultLocation ?? "BKW");
+
+            FileLogger.Log($"[FillDetailItems] Row {i}/{items.Count}: ItemCode='{item.ItemCode}', WH='{wh}', Loc='{loc}', Qty='{item.Quantity}', Price='{item.UnitPrice}'");
+            Report(progress, $"กำลังกรอกสินค้าแถวที่ {i}/{items.Count}: '{item.ItemCode}' (คลัง: {wh}, ที่เก็บ: {loc})...");
 
             // 1. Item Code (รหัสสินค้า)
             if (!string.IsNullOrWhiteSpace(item.ItemCode))
@@ -3038,12 +3041,21 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 await Task.Delay(200, cancellationToken);
             }
 
-            // 2. Warehouse (คลัง) - if specified
-            if (!string.IsNullOrWhiteSpace(item.Warehouse))
+            // 2. Warehouse (คลัง) - default "BK"
+            if (!string.IsNullOrWhiteSpace(wh))
             {
                 var ptWh = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Warehouse);
-                FileLogger.Log($"[FillDetailItems] Setting Warehouse '{item.Warehouse}' at ({ptWh.X}, {ptWh.Y})...");
-                await SetFieldTextSafeAsync(ptWh.X, ptWh.Y, item.Warehouse, cancellationToken);
+                FileLogger.Log($"[FillDetailItems] Setting Warehouse '{wh}' at ({ptWh.X}, {ptWh.Y})...");
+                await SetFieldTextSafeAsync(ptWh.X, ptWh.Y, wh, cancellationToken);
+                await Task.Delay(150, cancellationToken);
+            }
+
+            // 3. Location (ที่เก็บ) - default "BKW"
+            if (!string.IsNullOrWhiteSpace(loc))
+            {
+                var ptLoc = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Location);
+                FileLogger.Log($"[FillDetailItems] Setting Location '{loc}' at ({ptLoc.X}, {ptLoc.Y})...");
+                await SetFieldTextSafeAsync(ptLoc.X, ptLoc.Y, loc, cancellationToken);
                 await Task.Delay(150, cancellationToken);
             }
 

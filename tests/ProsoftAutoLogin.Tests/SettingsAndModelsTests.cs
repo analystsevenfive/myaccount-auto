@@ -866,6 +866,14 @@ public class SettingsAndModelsTests
         Assert.Equal(100 + 70, r1Code.X);
         Assert.Equal(50 + 187, r1Code.Y);
 
+        var r1Wh = CreditPurchaseDetailDetector.GetCellLocation(childRect, 1, DetailColumn.Warehouse);
+        Assert.Equal(100 + 322, r1Wh.X);
+        Assert.Equal(50 + 187, r1Wh.Y);
+
+        var r1Loc = CreditPurchaseDetailDetector.GetCellLocation(childRect, 1, DetailColumn.Location);
+        Assert.Equal(100 + 371, r1Loc.X);
+        Assert.Equal(50 + 187, r1Loc.Y);
+
         var r1Qty = CreditPurchaseDetailDetector.GetCellLocation(childRect, 1, DetailColumn.Quantity);
         Assert.Equal(100 + 484, r1Qty.X);
         Assert.Equal(50 + 187, r1Qty.Y);
@@ -909,6 +917,9 @@ public class SettingsAndModelsTests
         Assert.Equal("จำนวน", settings.Prosoft.VendorInput.QuantityColumn);
         Assert.Equal("ราคาต่อหน่วย", settings.Prosoft.VendorInput.UnitPriceColumn);
         Assert.Equal("คลัง", settings.Prosoft.VendorInput.WarehouseColumn);
+        Assert.Equal("ที่เก็บ", settings.Prosoft.VendorInput.LocationColumn);
+        Assert.Equal("BK", settings.Prosoft.VendorInput.DefaultWarehouse);
+        Assert.Equal("BKW", settings.Prosoft.VendorInput.DefaultLocation);
     }
 
     [Fact]
