@@ -19,13 +19,13 @@ internal static class CreditPurchaseGlDetector
     public const int GlTabIndex = 4;
 
     // Relative vertical offsets from childRect.Top on standard 789x479 Credit Purchase sheet
-    public const int TopControlsYOffset = 165;
+    public const int TopControlsYOffset = 185;
     public const int FirstRowCenterOffset = 215;
     public const int RowPitch = 17;
 
     // Horizontal offsets from childRect.Left
-    public const int EditGlCheckboxXOffset = 198;
-    public const int PostSearchButtonXOffset = 615;
+    public const int EditGlCheckboxXOffset = 182;
+    public const int PostSearchButtonXOffset = 600;
     public const int SaveButtonXOffset = 85;
 
     // Column horizontal boundaries and centers (offsets from childRect.Left)

@@ -3429,14 +3429,21 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         // 2. Click "serch" (Green arrow [ > ])
         Report(progress, "กำลังกดปุ่มค้นหารูปแบบการ Post (serch ปุ่มเขียว)...");
-        await ExecuteGlPostSearchAsync(childRect, cancellationToken);
+        var greenPt = await ExecuteGlPostSearchAsync(childRect, cancellationToken);
         Report(progress, "กดปุ่ม serch เรียบร้อย รายการบัญชีถูกคำนวณแล้ว");
         await Task.Delay(500, cancellationToken);
 
-        // 3. Check "แก้ไข GL" checkbox
+        // 3. Check "แก้ไข GL" checkbox (crucial: must be checked before department can be selected)
         Report(progress, "กำลังติ๊กเลือก 'แก้ไข GL'...");
-        await EnsureEditGlCheckedAsync(childRect, cancellationToken);
-        Report(progress, "ติ๊กเลือก 'แก้ไข GL' เรียบร้อย");
+        bool editChecked = await EnsureEditGlCheckedAsync(childRect, greenPt, cancellationToken);
+        if (editChecked)
+        {
+            Report(progress, "ติ๊กเลือก 'แก้ไข GL' เรียบร้อย");
+        }
+        else
+        {
+            Report(progress, "คำเตือน: ยืนยันการติ๊กเลือก 'แก้ไข GL' ไม่สำเร็จ กำลังดำเนินการต่อ...");
+        }
         await Task.Delay(300, cancellationToken);
 
         // 4. Fill Department "INTER" for all rows
@@ -3540,7 +3547,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         return true;
     }
 
-    private async Task<bool> ExecuteGlPostSearchAsync(
+    private async Task<Point?> ExecuteGlPostSearchAsync(
         Win32Native.RECT childRect,
         CancellationToken cancellationToken)
     {
@@ -3548,13 +3555,14 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         var defaultPoint = CreditPurchaseGlDetector.GetDefaultPostSearchButtonLocation(childRect);
         int clickX = defaultPoint.X;
         int clickY = defaultPoint.Y;
+        Point? detectedPoint = null;
 
         try
         {
             int scanX = childRect.Left + 550;
             int scanY = childRect.Top + 140;
             int scanW = Math.Min(150, childRect.Right - scanX);
-            int scanH = 60;
+            int scanH = 80;
             if (scanW > 30 && scanH > 20)
             {
                 using var bmp = new Bitmap(scanW, scanH);
@@ -3567,6 +3575,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 {
                     clickX = pt.Value.X;
                     clickY = pt.Value.Y;
+                    detectedPoint = pt.Value;
                     FileLogger.Log($"[ExecuteGlPostSearch] Visually detected green arrow button at ({clickX}, {clickY})");
                 }
             }
@@ -3579,50 +3588,104 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         FileLogger.Log($"[ExecuteGlPostSearch] Clicking green arrow button at ({clickX}, {clickY})...");
         await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
         await Task.Delay(600, cancellationToken);
-        return true;
+        return detectedPoint ?? new Point(clickX, clickY);
     }
 
     private async Task<bool> EnsureEditGlCheckedAsync(
         Win32Native.RECT childRect,
+        Point? greenArrowPoint,
         CancellationToken cancellationToken)
     {
-        FileLogger.Log("[EnsureEditGlChecked] Checking 'แก้ไข GL' checkbox...");
-        var defaultPoint = CreditPurchaseGlDetector.GetDefaultEditGlCheckboxLocation(childRect);
-        int clickX = defaultPoint.X;
-        int clickY = defaultPoint.Y;
+        FileLogger.Log("[EnsureEditGlChecked] Ensuring 'แก้ไข GL' checkbox is checked...");
 
-        bool isChecked = false;
+        // Anchor from green arrow: DX = -418, DY = 0
+        // Or default relative to childRect: Left + 182, Top + 185
+        int cbX = greenArrowPoint.HasValue
+            ? greenArrowPoint.Value.X - 418
+            : childRect.Left + CreditPurchaseGlDetector.EditGlCheckboxXOffset;
+        int cbY = greenArrowPoint.HasValue
+            ? greenArrowPoint.Value.Y
+            : childRect.Top + CreditPurchaseGlDetector.TopControlsYOffset;
+
+        FileLogger.Log($"[EnsureEditGlChecked] Target checkbox location: ({cbX}, {cbY})");
+
+        // Check current visual state
+        bool isChecked = CheckIfEditGlCheckboxIsChecked(cbX, cbY);
+        FileLogger.Log($"[EnsureEditGlChecked] Initial state: isChecked={isChecked}");
+
+        if (isChecked)
+        {
+            FileLogger.Log("[EnsureEditGlChecked] 'แก้ไข GL' is already checked.");
+            return true;
+        }
+
+        // Retry loop up to 3 attempts to ensure it is clicked and verified checked
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            FileLogger.Log($"[EnsureEditGlChecked] Attempt {attempt}: Clicking 'แก้ไข GL' checkbox at ({cbX}, {cbY})...");
+            await Win32Native.ClickScreenPointAsync(cbX, cbY, cancellationToken);
+            await Task.Delay(350, cancellationToken);
+
+            isChecked = CheckIfEditGlCheckboxIsChecked(cbX, cbY);
+            FileLogger.Log($"[EnsureEditGlChecked] After click {attempt}: isChecked={isChecked}");
+            if (isChecked)
+            {
+                FileLogger.Log("[EnsureEditGlChecked] Successfully verified 'แก้ไข GL' is checked!");
+                return true;
+            }
+
+            // Fallback: Also try clicking the text label "แก้ไข GL" directly to the right (+35px)
+            int labelX = cbX + 35;
+            FileLogger.Log($"[EnsureEditGlChecked] Attempt {attempt} fallback: Clicking 'แก้ไข GL' label at ({labelX}, {cbY})...");
+            await Win32Native.ClickScreenPointAsync(labelX, cbY, cancellationToken);
+            await Task.Delay(350, cancellationToken);
+
+            isChecked = CheckIfEditGlCheckboxIsChecked(cbX, cbY);
+            FileLogger.Log($"[EnsureEditGlChecked] After label click {attempt}: isChecked={isChecked}");
+            if (isChecked)
+            {
+                FileLogger.Log("[EnsureEditGlChecked] Successfully verified 'แก้ไข GL' is checked!");
+                return true;
+            }
+        }
+
+        return isChecked;
+    }
+
+    private static bool CheckIfEditGlCheckboxIsChecked(int cbX, int cbY)
+    {
         try
         {
-            int scanX = childRect.Left + 180;
-            int scanY = childRect.Top + 150;
-            int scanW = 80;
-            int scanH = 40;
+            int scanW = 16;
+            int scanH = 16;
             using var bmp = new Bitmap(scanW, scanH);
             using (var g = Graphics.FromImage(bmp))
             {
-                g.CopyFromScreen(scanX, scanY, 0, 0, new Size(scanW, scanH));
+                g.CopyFromScreen(cbX - 8, cbY - 8, 0, 0, new Size(scanW, scanH));
             }
-            isChecked = CreditPurchaseGlDetector.IsCheckboxCheckedInBitmap(bmp, defaultPoint.X - scanX, defaultPoint.Y - scanY);
-            FileLogger.Log($"[EnsureEditGlChecked] Current checkbox state: isChecked={isChecked}");
+
+            // Inner area of the 13x13 box (excluding outer border)
+            int darkPixels = 0;
+            for (int dy = 3; dy <= 12; dy++)
+            {
+                for (int dx = 3; dx <= 12; dx++)
+                {
+                    var p = bmp.GetPixel(dx, dy);
+                    if (p.R < 80 && p.G < 80 && p.B < 80)
+                    {
+                        darkPixels++;
+                    }
+                }
+            }
+
+            FileLogger.Log($"[CheckIfEditGlCheckboxIsChecked] Scanned at ({cbX}, {cbY}): darkPixels={darkPixels}");
+            return darkPixels >= 4;
         }
         catch (Exception ex)
         {
-            FileLogger.Log($"[EnsureEditGlChecked] Visual check notice: {ex.Message}");
+            FileLogger.Log($"[CheckIfEditGlCheckboxIsChecked] Notice: {ex.Message}");
+            return false;
         }
-
-        if (!isChecked)
-        {
-            FileLogger.Log($"[EnsureEditGlChecked] Clicking 'แก้ไข GL' checkbox at ({clickX}, {clickY})...");
-            await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
-            await Task.Delay(300, cancellationToken);
-        }
-        else
-        {
-            FileLogger.Log("[EnsureEditGlChecked] 'แก้ไข GL' is already checked.");
-        }
-
-        return true;
     }
 
     private async Task<int> FillGlDepartmentRowsAsync(

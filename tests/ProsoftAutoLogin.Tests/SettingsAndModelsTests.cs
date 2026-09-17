@@ -923,13 +923,13 @@ public class SettingsAndModelsTests
 
         // Post Search button [>]
         var postSearch = CreditPurchaseGlDetector.GetDefaultPostSearchButtonLocation(childRect);
-        Assert.Equal(100 + 615, postSearch.X);
-        Assert.Equal(50 + 165, postSearch.Y);
+        Assert.Equal(100 + 600, postSearch.X);
+        Assert.Equal(50 + 185, postSearch.Y);
 
         // Edit GL Checkbox
         var editGl = CreditPurchaseGlDetector.GetDefaultEditGlCheckboxLocation(childRect);
-        Assert.Equal(100 + 198, editGl.X);
-        Assert.Equal(50 + 165, editGl.Y);
+        Assert.Equal(100 + 182, editGl.X);
+        Assert.Equal(50 + 185, editGl.Y);
 
         // Department column cells
         var r1Dept = CreditPurchaseGlDetector.GetCellLocation(childRect, 1, GlColumn.Department);
