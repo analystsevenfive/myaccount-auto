@@ -80,6 +80,7 @@ internal static class Win32Native
     public const byte VK_DOWN = 0x28;
     public const byte VK_A = 0x41;
     public const byte VK_N = 0x4E;
+    public const byte VK_S = 0x53;
     public const byte VK_V = 0x56;
     public const byte VK_F2 = 0x70;
 

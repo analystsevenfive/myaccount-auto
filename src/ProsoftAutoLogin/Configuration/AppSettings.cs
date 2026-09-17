@@ -37,6 +37,14 @@ public sealed class VendorInputOptions
     public int TimeoutSeconds { get; set; } = 15;
 }
 
+public sealed class GlOptions
+{
+    public string DefaultDepartment { get; set; } = "INTER";
+    public bool AutoSaveAfterGl { get; set; } = true;
+    public List<string> FindDepartmentDialogTitleContains { get; set; } = ["Find", "แผนก"];
+    public int TimeoutSeconds { get; set; } = 15;
+}
+
 public sealed class ProsoftOptions
 {
     public string? ExecutablePath { get; set; } =
@@ -58,6 +66,8 @@ public sealed class ProsoftOptions
     public NavigationOptions Navigation { get; set; } = new();
 
     public VendorInputOptions VendorInput { get; set; } = new();
+
+    public GlOptions Gl { get; set; } = new();
 
     public List<ControlSelector> UserNameSelectors { get; set; } =
     [

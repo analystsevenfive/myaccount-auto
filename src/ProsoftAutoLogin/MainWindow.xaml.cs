@@ -154,6 +154,46 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ProcessGlButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetBusy(true);
+        _loginCancellation = new CancellationTokenSource();
+
+        var progress = new Progress<string>(message =>
+        {
+            StatusText.Text = message;
+            FileLogger.Log($"[Progress] {message}");
+        });
+
+        try
+        {
+            var result = await _automation.ProcessGlAndSaveAsync(
+                null,
+                true,
+                progress,
+                _loginCancellation.Token);
+
+            StatusText.Text = result.Message;
+            FileLogger.Log($"[GL Result] Success={result.IsSuccess}: {result.Message}");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText.Text = "ยกเลิกการทำงานแท็บ GL แล้ว";
+            FileLogger.Log("[Cancel] ยกเลิกการทำงานแท็บ GL");
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"เกิดข้อผิดพลาด: {ex.Message}";
+            FileLogger.Log($"[GL Error] {ex.Message}");
+        }
+        finally
+        {
+            _loginCancellation?.Dispose();
+            _loginCancellation = null;
+            SetBusy(false);
+        }
+    }
+
     private async void ExportButton_Click(object sender, RoutedEventArgs e)
     {
         SetBusy(true);
@@ -214,6 +254,7 @@ public partial class MainWindow : Window
         LaunchProsoftButton.IsEnabled = !isBusy;
         NavigateCreditPurchaseButton.IsEnabled = !isBusy;
         FillVendorButton.IsEnabled = !isBusy;
+        ProcessGlButton.IsEnabled = !isBusy;
         ExportButton.IsEnabled = !isBusy;
         CancelButton.IsEnabled = isBusy && _loginCancellation is not null;
         PasswordInput.IsEnabled = !isBusy;

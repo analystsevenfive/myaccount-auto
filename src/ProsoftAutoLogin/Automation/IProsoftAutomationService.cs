@@ -48,5 +48,11 @@ public interface IProsoftAutomationService
         IProgress<string>? progress,
         CancellationToken cancellationToken);
 
+    Task<VendorFillResult> ProcessGlAndSaveAsync(
+        string? department,
+        bool save,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken);
+
     Task<string> ExportUiTreeAsync(CancellationToken cancellationToken);
 }

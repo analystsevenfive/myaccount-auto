@@ -2,9 +2,9 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Prosoft Auto Login"
-        Width="620"
+        Width="680"
         Height="660"
-        MinWidth="520"
+        MinWidth="580"
         MinHeight="560"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="24,18,24,18">
@@ -71,6 +71,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Button x:Name="LoginButton"
@@ -81,7 +82,7 @@
                     Background="{StaticResource BrandBrush}"
                     Foreground="White"
                     BorderThickness="0"
-                    Margin="0,0,6,0"
+                    Margin="0,0,5,0"
                     Click="LoginButton_Click" />
             <Button x:Name="NavigateCreditPurchaseButton"
                     Grid.Column="1"
@@ -91,7 +92,7 @@
                     Background="#1976D2"
                     Foreground="White"
                     BorderThickness="0"
-                    Margin="0,0,6,0"
+                    Margin="0,0,5,0"
                     Click="NavigateCreditPurchaseButton_Click" />
             <Button x:Name="FillVendorButton"
                     Grid.Column="2"
@@ -101,10 +102,20 @@
                     Background="#2E7D32"
                     Foreground="White"
                     BorderThickness="0"
-                    Margin="0,0,6,0"
+                    Margin="0,0,5,0"
                     Click="FillVendorButton_Click" />
-            <Button x:Name="CancelButton"
+            <Button x:Name="ProcessGlButton"
                     Grid.Column="3"
+                    Content="แท็บ GL &amp; Save"
+                    Height="40"
+                    FontWeight="SemiBold"
+                    Background="#7B1FA2"
+                    Foreground="White"
+                    BorderThickness="0"
+                    Margin="0,0,5,0"
+                    Click="ProcessGlButton_Click" />
+            <Button x:Name="CancelButton"
+                    Grid.Column="4"
                     Content="Cancel"
                     Height="40"
                     MinWidth="65"
@@ -122,14 +133,14 @@
             <StackPanel>
                 <TextBlock Text="Status" FontWeight="SemiBold" />
                 <TextBlock x:Name="StatusText"
-                           Text="พร้อม — กด Login, เปิดหน้าซื้อเชื่อ หรือ กรอกผู้ขายจาก CSV ได้ทันที"
+                           Text="พร้อม — กด Login, เปิดหน้าซื้อเชื่อ, กรอกผู้ขายจาก CSV หรือ แท็บ GL &amp; Save ได้ทันที"
                            Margin="0,4,0,0"
                            TextWrapping="Wrap" />
             </StackPanel>
         </Border>
 
         <TextBlock Grid.Row="4"
-                   Text="ถ้าเปิดหน้าซื้อเชื่อไว้อยู่แล้ว สามารถกดปุ่ม 'กรอกผู้ขายจาก CSV' เพื่อค้นหาและเลือกผู้ขายจาก input/input.csv ได้ทันที"
+                   Text="ถ้าเปิดหน้าซื้อเชื่อไว้อยู่แล้ว สามารถกดปุ่ม 'กรอกผู้ขายจาก CSV' (ระบบจะกรอกผู้ขาย, ภาษี NOVAT, หัวเอกสาร, สินค้า, แท็บ GL แผนก INTER และ Save ให้จบครบวงจร) หรือกด 'แท็บ GL &amp; Save' แยกเฉพาะส่วน GL ได้ทันที"
                    TextWrapping="Wrap"
                    FontSize="12"
                    Foreground="#666666" />

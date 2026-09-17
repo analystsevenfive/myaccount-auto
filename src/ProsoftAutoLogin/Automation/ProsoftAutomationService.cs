@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Text;
 using FlaUI.Core;
@@ -126,6 +127,17 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
     {
         return Task.Run(
             () => FillVendorFromCsvCoreAsync(csvPath, progress, cancellationToken),
+            cancellationToken);
+    }
+
+    public Task<VendorFillResult> ProcessGlAndSaveAsync(
+        string? department,
+        bool save,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(
+            () => ProcessGlAndSaveStandaloneAsync(department, save, progress, cancellationToken),
             cancellationToken);
     }
 
@@ -2001,12 +2013,25 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             FileLogger.Log("[FillDetailItems] Notice: No detail items found in CSV input file.");
         }
 
+        // Step 9: GL Tab, Post search [>], Checkbox "แก้ไข GL", Department "INTER" for all rows, and Save
+        Report(progress, "กำลังสลับไปแท็บ GL...");
+        var glResult = await ProcessGlAndSaveCoreAsync(
+            childHwnd,
+            childRect,
+            purchaseElem,
+            process,
+            _options.Gl.DefaultDepartment,
+            _options.Gl.AutoSaveAfterGl,
+            progress,
+            cancellationToken);
+
         var docInfo = string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ? "" : $", เลขที่เอกสาร: {vendorRow.DocumentNumber}";
         var invInfo = string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber) ? "" : $", เลขที่ใบกำกับ: {vendorRow.TaxInvoiceNumber}";
         var doInfo = string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber) ? "" : $", เลขที่ใบส่งของ: {vendorRow.DeliveryOrderNumber}";
         var itemCount = vendorRow.Items?.Count ?? 0;
         var itemInfo = itemCount > 0 ? $", รายการสินค้า {itemCount} รายการในแท็บ Detail" : "";
-        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' กำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) กรอกเอกสาร{docInfo}{invInfo}{doInfo}{itemInfo} สำเร็จ";
+        var glInfo = glResult.IsSuccess ? $", ดำเนินการแท็บ GL (แผนก {_options.Gl.DefaultDepartment}) และบันทึกข้อมูลเรียบร้อย" : "";
+        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' กำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) กรอกเอกสาร{docInfo}{invInfo}{doInfo}{itemInfo}{glInfo} สำเร็จ";
         Report(progress, finalMsg);
         return VendorFillResult.Success(finalMsg, targetVendorName);
     }
@@ -3336,5 +3361,625 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                clean.Contains("ชื่อผู้จำหน่าย", StringComparison.OrdinalIgnoreCase) ||
                clean.Contains("Vendor Name", StringComparison.OrdinalIgnoreCase) ||
                clean.Equals("Vendor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<VendorFillResult> ProcessGlAndSaveStandaloneAsync(
+        string? department,
+        bool save,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var targetDept = string.IsNullOrWhiteSpace(department) ? _options.Gl.DefaultDepartment : department;
+        Report(progress, "กำลังค้นหา Prosoft process...");
+        using var process = FindExistingProcess();
+        using var application = Application.Attach(process);
+        using var automation = new UIA3Automation();
+
+        Report(progress, "กำลังค้นหาหน้าต่างหลักของ Prosoft...");
+        var mainWindow = await FindMainWindowAsync(process, application, automation, cancellationToken);
+        var mainWindowHandle = mainWindow.Properties.NativeWindowHandle.ValueOrDefault;
+
+        if (mainWindowHandle != IntPtr.Zero)
+        {
+            Win32Native.ShowWindow(mainWindowHandle, Win32Native.SW_RESTORE);
+            Win32Native.SetForegroundWindow(mainWindowHandle);
+            await Task.Delay(200, cancellationToken);
+        }
+
+        Report(progress, "กำลังค้นหาหน้าต่างซื้อเชื่อ (MDI Sheet)...");
+        var (childHwnd, childRect, purchaseElem) = FindCreditPurchaseWindowInfo(mainWindow, mainWindowHandle);
+        if (childHwnd == IntPtr.Zero && (childRect.Right - childRect.Left) <= 0)
+        {
+            return VendorFillResult.Error("พบหน้าหลักของ Prosoft แต่ไม่พบหน้าต่างย่อยซื้อเชื่อ");
+        }
+
+        return await ProcessGlAndSaveCoreAsync(childHwnd, childRect, purchaseElem, process, targetDept, save, progress, cancellationToken);
+    }
+
+    private async Task<VendorFillResult> ProcessGlAndSaveCoreAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        AutomationElement? purchaseElem,
+        Process process,
+        string targetDept,
+        bool save,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.GetWindowRect(childHwnd, out childRect);
+            Win32Native.SetForegroundWindow(childHwnd);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 1. Switch to GL tab
+        Report(progress, "กำลังสลับไปแท็บ GL...");
+        bool glSwitched = await SwitchToGlTabAsync(childHwnd, childRect, purchaseElem, cancellationToken);
+        if (glSwitched)
+        {
+            Report(progress, "สลับไปแท็บ GL เรียบร้อย");
+        }
+        await Task.Delay(400, cancellationToken);
+
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.GetWindowRect(childHwnd, out childRect);
+        }
+
+        // 2. Click "serch" (Green arrow [ > ])
+        Report(progress, "กำลังกดปุ่มค้นหารูปแบบการ Post (serch ปุ่มเขียว)...");
+        await ExecuteGlPostSearchAsync(childRect, cancellationToken);
+        Report(progress, "กดปุ่ม serch เรียบร้อย รายการบัญชีถูกคำนวณแล้ว");
+        await Task.Delay(500, cancellationToken);
+
+        // 3. Check "แก้ไข GL" checkbox
+        Report(progress, "กำลังติ๊กเลือก 'แก้ไข GL'...");
+        await EnsureEditGlCheckedAsync(childRect, cancellationToken);
+        Report(progress, "ติ๊กเลือก 'แก้ไข GL' เรียบร้อย");
+        await Task.Delay(300, cancellationToken);
+
+        // 4. Fill Department "INTER" for all rows
+        Report(progress, $"กำลังกำหนดคอลัมน์ แผนก เป็น '{targetDept}' ทุกรายการ...");
+        int rowsUpdated = await FillGlDepartmentRowsAsync(childHwnd, childRect, targetDept, process, progress, cancellationToken);
+        Report(progress, $"กำหนดแผนก '{targetDept}' ในตาราง GL สำเร็จ ({rowsUpdated} รายการ)");
+        await Task.Delay(400, cancellationToken);
+
+        // 5. Save if enabled
+        if (save)
+        {
+            Report(progress, "กำลังกดปุ่ม Save เพื่อบันทึกเอกสาร...");
+            await ClickSaveDocumentAsync(childHwnd, childRect, purchaseElem, process, progress, cancellationToken);
+            Report(progress, "บันทึกเอกสารเรียบร้อย");
+        }
+
+        return VendorFillResult.Success($"กำหนดแท็บ GL (แผนก: {targetDept}, {rowsUpdated} รายการ) {(save ? "และบันทึกเอกสารเรียบร้อย" : "เรียบร้อย")}");
+    }
+
+    private async Task<bool> SwitchToGlTabAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        AutomationElement? purchaseElem,
+        CancellationToken cancellationToken)
+    {
+        FileLogger.Log($"[SwitchToGlTab] Switching to 'GL' tab on Credit Purchase window HWND=0x{childHwnd.ToInt64():X}...");
+
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.SetForegroundWindow(childHwnd);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 1. Try FlaUI UIA TabItem
+        if (purchaseElem != null)
+        {
+            try
+            {
+                var tabItem = purchaseElem.FindFirstDescendant(cf =>
+                    cf.ByName("GL").Or(cf.ByName("gl")));
+                if (tabItem != null)
+                {
+                    FileLogger.Log($"[SwitchToGlTab] Found UIA GL tab item: '{tabItem.Name}'");
+                    if (tabItem.Patterns.SelectionItem.IsSupported)
+                    {
+                        tabItem.Patterns.SelectionItem.Pattern.Select();
+                        await Task.Delay(400, cancellationToken);
+                        return true;
+                    }
+                    else
+                    {
+                        tabItem.Click();
+                        await Task.Delay(400, cancellationToken);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SwitchToGlTab] UIA tab select notice: {ex.Message}");
+            }
+        }
+
+        // 2. Find PBTabControl32_80
+        IntPtr tabControlHwnd = IntPtr.Zero;
+        Win32Native.RECT tabRect = default;
+        Win32Native.EnumChildWindows(childHwnd, (ch, _) =>
+        {
+            var cls = Win32Native.GetClass(ch);
+            if (cls.Contains("TabControl", StringComparison.OrdinalIgnoreCase) ||
+                cls.Contains("pbtab", StringComparison.OrdinalIgnoreCase))
+            {
+                tabControlHwnd = ch;
+                Win32Native.GetWindowRect(ch, out tabRect);
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        // 3. Click on screen coordinate for GL tab header
+        int glX = tabControlHwnd != IntPtr.Zero ? tabRect.Left + 300 : childRect.Left + 300;
+        int glY = tabControlHwnd != IntPtr.Zero ? tabRect.Bottom - 14 : childRect.Bottom - 52;
+
+        FileLogger.Log($"[SwitchToGlTab] Clicking 'GL' tab at ({glX}, {glY})...");
+        await Win32Native.ClickScreenPointAsync(glX, glY, cancellationToken);
+        await Task.Delay(250, cancellationToken);
+
+        // 4. Also send Win32 TCM_SETCURSEL / TCM_SETCURFOCUS message to tab control (index 4 = GL)
+        if (tabControlHwnd != IntPtr.Zero)
+        {
+            FileLogger.Log("[SwitchToGlTab] Sending TCM_SETCURSEL (index=4) to TabControl...");
+            Win32Native.SendMessage(tabControlHwnd, Win32Native.TCM_SETCURSEL, (IntPtr)CreditPurchaseGlDetector.GlTabIndex, IntPtr.Zero);
+            Win32Native.SendMessage(tabControlHwnd, Win32Native.TCM_SETCURFOCUS, (IntPtr)CreditPurchaseGlDetector.GlTabIndex, IntPtr.Zero);
+        }
+
+        await Task.Delay(400, cancellationToken);
+        return true;
+    }
+
+    private async Task<bool> ExecuteGlPostSearchAsync(
+        Win32Native.RECT childRect,
+        CancellationToken cancellationToken)
+    {
+        FileLogger.Log("[ExecuteGlPostSearch] Clicking post search green arrow button [ > ]...");
+        var defaultPoint = CreditPurchaseGlDetector.GetDefaultPostSearchButtonLocation(childRect);
+        int clickX = defaultPoint.X;
+        int clickY = defaultPoint.Y;
+
+        try
+        {
+            int scanX = childRect.Left + 550;
+            int scanY = childRect.Top + 140;
+            int scanW = Math.Min(150, childRect.Right - scanX);
+            int scanH = 60;
+            if (scanW > 30 && scanH > 20)
+            {
+                using var bmp = new Bitmap(scanW, scanH);
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.CopyFromScreen(scanX, scanY, 0, 0, new Size(scanW, scanH));
+                }
+                var pt = CreditPurchaseGlDetector.FindGreenArrowButtonInBitmap(bmp, scanX, scanY);
+                if (pt.HasValue)
+                {
+                    clickX = pt.Value.X;
+                    clickY = pt.Value.Y;
+                    FileLogger.Log($"[ExecuteGlPostSearch] Visually detected green arrow button at ({clickX}, {clickY})");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLogger.Log($"[ExecuteGlPostSearch] Visual scan notice: {ex.Message}");
+        }
+
+        FileLogger.Log($"[ExecuteGlPostSearch] Clicking green arrow button at ({clickX}, {clickY})...");
+        await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
+        await Task.Delay(600, cancellationToken);
+        return true;
+    }
+
+    private async Task<bool> EnsureEditGlCheckedAsync(
+        Win32Native.RECT childRect,
+        CancellationToken cancellationToken)
+    {
+        FileLogger.Log("[EnsureEditGlChecked] Checking 'แก้ไข GL' checkbox...");
+        var defaultPoint = CreditPurchaseGlDetector.GetDefaultEditGlCheckboxLocation(childRect);
+        int clickX = defaultPoint.X;
+        int clickY = defaultPoint.Y;
+
+        bool isChecked = false;
+        try
+        {
+            int scanX = childRect.Left + 180;
+            int scanY = childRect.Top + 150;
+            int scanW = 80;
+            int scanH = 40;
+            using var bmp = new Bitmap(scanW, scanH);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(scanX, scanY, 0, 0, new Size(scanW, scanH));
+            }
+            isChecked = CreditPurchaseGlDetector.IsCheckboxCheckedInBitmap(bmp, defaultPoint.X - scanX, defaultPoint.Y - scanY);
+            FileLogger.Log($"[EnsureEditGlChecked] Current checkbox state: isChecked={isChecked}");
+        }
+        catch (Exception ex)
+        {
+            FileLogger.Log($"[EnsureEditGlChecked] Visual check notice: {ex.Message}");
+        }
+
+        if (!isChecked)
+        {
+            FileLogger.Log($"[EnsureEditGlChecked] Clicking 'แก้ไข GL' checkbox at ({clickX}, {clickY})...");
+            await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
+            await Task.Delay(300, cancellationToken);
+        }
+        else
+        {
+            FileLogger.Log("[EnsureEditGlChecked] 'แก้ไข GL' is already checked.");
+        }
+
+        return true;
+    }
+
+    private async Task<int> FillGlDepartmentRowsAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        string departmentCode,
+        Process process,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        int rowCount = 0;
+        int maxRows = 10;
+
+        for (int r = 1; r <= maxRows; r++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (r > 2)
+            {
+                bool hasAccount = CheckIfGlRowHasData(childRect, r);
+                if (!hasAccount)
+                {
+                    FileLogger.Log($"[FillGlDepartment] Row {r} has no account data; stopping.");
+                    break;
+                }
+            }
+
+            Report(progress, $"กำลังกำหนดแผนก '{departmentCode}' แถวที่ {r}...");
+            await SetDepartmentOnRowAsync(childHwnd, childRect, r, departmentCode, process, cancellationToken);
+            rowCount++;
+            await Task.Delay(300, cancellationToken);
+        }
+
+        return rowCount;
+    }
+
+    private async Task SetDepartmentOnRowAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        int rowIndex,
+        string departmentCode,
+        Process process,
+        CancellationToken cancellationToken)
+    {
+        var cellPt = CreditPurchaseGlDetector.GetCellLocation(childRect, rowIndex, GlColumn.Department);
+        int cellX = cellPt.X;
+        int cellY = cellPt.Y;
+
+        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Clicking Department cell at ({cellX}, {cellY})...");
+        await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
+        await Task.Delay(150, cancellationToken);
+
+        IntPtr deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
+
+        if (deptDlgHwnd == IntPtr.Zero)
+        {
+            FileLogger.Log($"[SetDepartmentOnRow] Setting Department '{departmentCode}' via SetFieldTextSafeAsync...");
+            await SetFieldTextSafeAsync(cellX, cellY, departmentCode, cancellationToken);
+            await Task.Delay(150, cancellationToken);
+
+            deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
+            if (deptDlgHwnd == IntPtr.Zero)
+            {
+                int arrowX = childRect.Left + CreditPurchaseGlDetector.DepartmentColumnRightOffset - 12;
+                await Win32Native.ClickScreenPointAsync(arrowX, cellY, cancellationToken);
+                await Task.Delay(100, cancellationToken);
+                deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
+            }
+        }
+
+        if (deptDlgHwnd != IntPtr.Zero)
+        {
+            FileLogger.Log($"[SetDepartmentOnRow] Found 'Find แผนก' dialog HWND=0x{deptDlgHwnd.ToInt64():X}. Operating dialog...");
+            await OperateDepartmentSearchDialogAsync(deptDlgHwnd, departmentCode, process, cancellationToken);
+        }
+        else
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+            await Task.Delay(100, cancellationToken);
+        }
+
+        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Department '{departmentCode}' set.");
+    }
+
+    private IntPtr FindDepartmentSearchDialogHwnd(Process process)
+    {
+        IntPtr found = IntPtr.Zero;
+        Win32Native.EnumWindows((h, _) =>
+        {
+            uint pid;
+            Win32Native.GetWindowThreadProcessId(h, out pid);
+            if (pid == (uint)process.Id && Win32Native.IsWindowVisible(h))
+            {
+                var txt = Win32Native.GetText(h);
+                if (txt.Contains("แผนก", StringComparison.OrdinalIgnoreCase) ||
+                    (txt.Contains("Find", StringComparison.OrdinalIgnoreCase) &&
+                     !txt.Contains("ผู้ขาย", StringComparison.OrdinalIgnoreCase) &&
+                     !txt.Contains("ภาษี", StringComparison.OrdinalIgnoreCase)))
+                {
+                    found = h;
+                    return false;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private async Task<bool> OperateDepartmentSearchDialogAsync(
+        IntPtr deptDlgHwnd,
+        string targetDepartment,
+        Process process,
+        CancellationToken cancellationToken)
+    {
+        Win32Native.SetForegroundWindow(deptDlgHwnd);
+        await Task.Delay(150, cancellationToken);
+
+        var children = new List<(IntPtr Hwnd, string ClassName, string Text, int Id, Win32Native.RECT Rect)>();
+        Win32Native.EnumChildWindows(deptDlgHwnd, (h, _) =>
+        {
+            var cls = Win32Native.GetClass(h);
+            var txt = Win32Native.GetText(h);
+            var id = Win32Native.GetDlgCtrlID(h);
+            Win32Native.GetWindowRect(h, out var r);
+            children.Add((h, cls, txt, id, r));
+            return true;
+        }, IntPtr.Zero);
+
+        var editCand = children.FirstOrDefault(c => c.ClassName.Equals("Edit", StringComparison.OrdinalIgnoreCase) && c.Id == 1018);
+        if (editCand.Hwnd == IntPtr.Zero)
+        {
+            editCand = children.FirstOrDefault(c => c.ClassName.Equals("Edit", StringComparison.OrdinalIgnoreCase) && (c.Rect.Right - c.Rect.Left) > 50);
+        }
+
+        if (editCand.Hwnd != IntPtr.Zero)
+        {
+            int ex = (editCand.Rect.Left + editCand.Rect.Right) / 2;
+            int ey = (editCand.Rect.Top + editCand.Rect.Bottom) / 2;
+            await Win32Native.ClickScreenPointAsync(ex, ey, cancellationToken);
+            await Task.Delay(50, cancellationToken);
+            await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+
+            Win32Native.SetClipboardTextSafe(targetDepartment);
+            await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
+            await Task.Delay(100, cancellationToken);
+
+            var searchBtn = children.FirstOrDefault(c => c.Id == 1019);
+            if (searchBtn.Hwnd != IntPtr.Zero)
+            {
+                int bx = (searchBtn.Rect.Left + searchBtn.Rect.Right) / 2;
+                int by = (searchBtn.Rect.Top + searchBtn.Rect.Bottom) / 2;
+                await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
+            }
+            else
+            {
+                await Win32Native.SendKeyPressAsync(Win32Native.VK_F2, cancellationToken);
+            }
+            await Task.Delay(300, cancellationToken);
+        }
+
+        var dw = children.FirstOrDefault(c => c.ClassName.StartsWith("pbdw", StringComparison.OrdinalIgnoreCase) ||
+                                              c.ClassName.Contains("DataWindow", StringComparison.OrdinalIgnoreCase));
+
+        Win32Native.GetWindowRect(deptDlgHwnd, out var dlgRect);
+        int clickX = dw.Hwnd != IntPtr.Zero ? dw.Rect.Left + 50 : dlgRect.Left + 60;
+        int clickY = dw.Hwnd != IntPtr.Zero ? dw.Rect.Top + 24 : dlgRect.Top + 90;
+
+        FileLogger.Log($"[OperateDeptSearch] Double-clicking result row at ({clickX}, {clickY})...");
+        await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
+        await Task.Delay(100, cancellationToken);
+        await Win32Native.DoubleClickScreenPointAsync(clickX, clickY, cancellationToken);
+        await Task.Delay(200, cancellationToken);
+
+        if (Win32Native.IsWindow(deptDlgHwnd) && Win32Native.IsWindowVisible(deptDlgHwnd))
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+            await Task.Delay(200, cancellationToken);
+        }
+
+        var okBtn = children.FirstOrDefault(c => c.ClassName.Equals("Button", StringComparison.OrdinalIgnoreCase) &&
+                                                (c.Text.Equals("OK", StringComparison.OrdinalIgnoreCase) ||
+                                                 c.Text.Equals("ตกลง", StringComparison.OrdinalIgnoreCase) ||
+                                                 c.Id == 1 || c.Id == 1001));
+        if (okBtn.Hwnd != IntPtr.Zero && Win32Native.IsWindowVisible(deptDlgHwnd))
+        {
+            int obx = (okBtn.Rect.Left + okBtn.Rect.Right) / 2;
+            int oby = (okBtn.Rect.Top + okBtn.Rect.Bottom) / 2;
+            await Win32Native.ClickScreenPointAsync(obx, oby, cancellationToken);
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return true;
+    }
+
+    private static bool CheckIfGlRowHasData(Win32Native.RECT childRect, int rowIndex)
+    {
+        try
+        {
+            int scanX = childRect.Left + 56;
+            int rowY = childRect.Top + CreditPurchaseGlDetector.FirstRowCenterOffset + (rowIndex - 1) * CreditPurchaseGlDetector.RowPitch;
+            int scanW = 90;
+            int scanH = 12;
+            using var bmp = new Bitmap(scanW, scanH);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(scanX, rowY - 6, 0, 0, new Size(scanW, scanH));
+            }
+
+            int darkPixels = 0;
+            for (int y = 0; y < scanH; y++)
+            {
+                for (int x = 0; x < scanW; x++)
+                {
+                    var p = bmp.GetPixel(x, y);
+                    if (p.R < 100 && p.G < 100 && p.B < 100)
+                    {
+                        darkPixels++;
+                    }
+                }
+            }
+
+            return darkPixels >= 8;
+        }
+        catch
+        {
+            return rowIndex <= 2;
+        }
+    }
+
+    private async Task<bool> ClickSaveDocumentAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        AutomationElement? purchaseElem,
+        Process process,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var savePt = CreditPurchaseGlDetector.GetDefaultSaveButtonLocation(childRect);
+        int clickX = savePt.X;
+        int clickY = savePt.Y;
+
+        bool uiaClicked = false;
+        if (purchaseElem != null)
+        {
+            try
+            {
+                var saveBtn = purchaseElem.FindFirstDescendant(cf =>
+                    cf.ByName("Save").Or(cf.ByName("บันทึก")));
+                if (saveBtn != null)
+                {
+                    FileLogger.Log($"[ClickSaveDocument] Found UIA Save button: '{saveBtn.Name}'");
+                    if (saveBtn.Patterns.Invoke.IsSupported)
+                    {
+                        saveBtn.Patterns.Invoke.Pattern.Invoke();
+                        uiaClicked = true;
+                    }
+                    else
+                    {
+                        saveBtn.Click();
+                        uiaClicked = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[ClickSaveDocument] UIA Save notice: {ex.Message}");
+            }
+        }
+
+        if (!uiaClicked)
+        {
+            FileLogger.Log($"[ClickSaveDocument] Clicking toolbar Save button at ({clickX}, {clickY})...");
+            await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
+        }
+
+        await Task.Delay(300, cancellationToken);
+
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_S, cancellationToken);
+        await Task.Delay(500, cancellationToken);
+
+        await HandleSaveConfirmationPopupAsync(process, progress, cancellationToken);
+        return true;
+    }
+
+    private async Task HandleSaveConfirmationPopupAsync(
+        Process process,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        FileLogger.Log("[HandleSavePopup] Checking for save confirmation popup...");
+        var deadline = DateTime.UtcNow.AddSeconds(4);
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IntPtr popupHwnd = IntPtr.Zero;
+            string popupTitle = "";
+            Win32Native.EnumWindows((h, _) =>
+            {
+                uint pid;
+                Win32Native.GetWindowThreadProcessId(h, out pid);
+                if (pid == (uint)process.Id && Win32Native.IsWindowVisible(h))
+                {
+                    var cls = Win32Native.GetClass(h);
+                    var txt = Win32Native.GetText(h);
+                    if (cls == "#32770" || cls.Contains("FNWND", StringComparison.OrdinalIgnoreCase))
+                    {
+                        popupHwnd = h;
+                        popupTitle = txt;
+                        return false;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            if (popupHwnd != IntPtr.Zero)
+            {
+                FileLogger.Log($"[HandleSavePopup] Found popup HWND=0x{popupHwnd.ToInt64():X} Title='{popupTitle}'");
+                IntPtr confirmBtnHwnd = IntPtr.Zero;
+                Win32Native.EnumChildWindows(popupHwnd, (ch, _) =>
+                {
+                    var cls = Win32Native.GetClass(ch);
+                    var txt = Win32Native.GetText(ch);
+                    var id = Win32Native.GetDlgCtrlID(ch);
+                    if (cls.Contains("Button", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (txt.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
+                            txt.Contains("ตกลง", StringComparison.OrdinalIgnoreCase) ||
+                            txt.Contains("Yes", StringComparison.OrdinalIgnoreCase) ||
+                            txt.Contains("ใช่", StringComparison.OrdinalIgnoreCase) ||
+                            id == 1 || id == 6)
+                        {
+                            confirmBtnHwnd = ch;
+                            return false;
+                        }
+                    }
+                    return true;
+                }, IntPtr.Zero);
+
+                if (confirmBtnHwnd != IntPtr.Zero)
+                {
+                    FileLogger.Log($"[HandleSavePopup] Clicking confirm button HWND=0x{confirmBtnHwnd.ToInt64():X}...");
+                    Win32Native.GetWindowRect(confirmBtnHwnd, out var bRect);
+                    int bx = (bRect.Left + bRect.Right) / 2;
+                    int by = (bRect.Top + bRect.Bottom) / 2;
+                    await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
+                    await Task.Delay(300, cancellationToken);
+                }
+                else
+                {
+                    Win32Native.SetForegroundWindow(popupHwnd);
+                    await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+                }
+
+                Report(progress, $"ตรวจพบ Popup บันทึก: '{popupTitle}' — ดำเนินการยืนยันเรียบร้อย");
+                return;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        FileLogger.Log("[HandleSavePopup] No modal confirmation popup appeared (save completed directly).");
     }
 }
