@@ -942,7 +942,7 @@ public class SettingsAndModelsTests
 
         // Save button on bottom toolbar
         var saveBtn = CreditPurchaseGlDetector.GetDefaultSaveButtonLocation(childRect);
-        Assert.Equal(100 + 105, saveBtn.X);
+        Assert.Equal(100 + 85, saveBtn.X);
         Assert.Equal(529 - 20, saveBtn.Y);
     }
 

@@ -3449,7 +3449,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         if (save)
         {
             Report(progress, "กำลังกดปุ่ม Save เพื่อบันทึกเอกสาร...");
-            await ClickSaveDocumentAsync(childHwnd, childRect, purchaseElem, process, progress, cancellationToken);
+            var saveResult = await ClickSaveDocumentAsync(childHwnd, childRect, purchaseElem, process, progress, cancellationToken);
+            if (!saveResult.Success)
+            {
+                return VendorFillResult.Error($"กำหนดแท็บ GL (แผนก: {targetDept}, {rowsUpdated} รายการ) สำเร็จ แต่บันทึกเอกสารไม่สำเร็จ: {saveResult.Message}");
+            }
             Report(progress, "บันทึกเอกสารเรียบร้อย");
         }
 
@@ -3667,26 +3671,39 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         int cellX = cellPt.X;
         int cellY = cellPt.Y;
 
+        if (childHwnd != IntPtr.Zero)
+        {
+            Win32Native.SetForegroundWindow(childHwnd);
+        }
+
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Clicking Department cell at ({cellX}, {cellY})...");
         await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(150, cancellationToken);
 
+        // Try 1: Open "Find แผนก" dialog by sending F2 key (standard Prosoft shortcut)
+        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Sending F2 to open 'Find แผนก' dialog...");
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_F2, cancellationToken);
+        await Task.Delay(400, cancellationToken);
+
         IntPtr deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
 
+        // Try 2: Double-click cell if F2 didn't open dialog immediately
         if (deptDlgHwnd == IntPtr.Zero)
         {
-            FileLogger.Log($"[SetDepartmentOnRow] Setting Department '{departmentCode}' via SetFieldTextSafeAsync...");
-            await SetFieldTextSafeAsync(cellX, cellY, departmentCode, cancellationToken);
-            await Task.Delay(150, cancellationToken);
-
+            FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: F2 didn't open dialog. Double-clicking cell at ({cellX}, {cellY})...");
+            await Win32Native.DoubleClickScreenPointAsync(cellX, cellY, cancellationToken);
+            await Task.Delay(400, cancellationToken);
             deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
-            if (deptDlgHwnd == IntPtr.Zero)
-            {
-                int arrowX = childRect.Left + CreditPurchaseGlDetector.DepartmentColumnRightOffset - 12;
-                await Win32Native.ClickScreenPointAsync(arrowX, cellY, cancellationToken);
-                await Task.Delay(100, cancellationToken);
-                deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
-            }
+        }
+
+        // Try 3: Click dropdown arrow [v] on the right side of the cell
+        if (deptDlgHwnd == IntPtr.Zero)
+        {
+            int arrowX = childRect.Left + CreditPurchaseGlDetector.DepartmentColumnRightOffset - 8;
+            FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Clicking dropdown arrow at ({arrowX}, {cellY})...");
+            await Win32Native.ClickScreenPointAsync(arrowX, cellY, cancellationToken);
+            await Task.Delay(400, cancellationToken);
+            deptDlgHwnd = FindDepartmentSearchDialogHwnd(process);
         }
 
         if (deptDlgHwnd != IntPtr.Zero)
@@ -3696,8 +3713,18 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         }
         else
         {
-            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+            // Fallback 4: Type keys directly into the cell and press Enter (no TAB!)
+            FileLogger.Log($"[SetDepartmentOnRow] Dialog not opened; typing '{departmentCode}' directly into cell...");
+            await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
             await Task.Delay(100, cancellationToken);
+            foreach (char ch in departmentCode)
+            {
+                var vk = (byte)char.ToUpperInvariant(ch);
+                await Win32Native.SendKeyPressAsync(vk, cancellationToken);
+                await Task.Delay(30, cancellationToken);
+            }
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+            await Task.Delay(150, cancellationToken);
         }
 
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Department '{departmentCode}' set.");
@@ -3777,7 +3804,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             {
                 await Win32Native.SendKeyPressAsync(Win32Native.VK_F2, cancellationToken);
             }
-            await Task.Delay(300, cancellationToken);
+            await Task.Delay(400, cancellationToken);
         }
 
         var dw = children.FirstOrDefault(c => c.ClassName.StartsWith("pbdw", StringComparison.OrdinalIgnoreCase) ||
@@ -3785,18 +3812,23 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         Win32Native.GetWindowRect(deptDlgHwnd, out var dlgRect);
         int clickX = dw.Hwnd != IntPtr.Zero ? dw.Rect.Left + 50 : dlgRect.Left + 60;
-        int clickY = dw.Hwnd != IntPtr.Zero ? dw.Rect.Top + 24 : dlgRect.Top + 90;
+        // Data row 1 is ~32px below top of DataWindow (header banner is ~21px)
+        int clickY = dw.Hwnd != IntPtr.Zero ? dw.Rect.Top + 32 : dlgRect.Top + 95;
+
+        // Ensure row 1 is selected
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_HOME, cancellationToken);
+        await Task.Delay(100, cancellationToken);
 
         FileLogger.Log($"[OperateDeptSearch] Double-clicking result row at ({clickX}, {clickY})...");
         await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
         await Task.Delay(100, cancellationToken);
         await Win32Native.DoubleClickScreenPointAsync(clickX, clickY, cancellationToken);
-        await Task.Delay(200, cancellationToken);
+        await Task.Delay(250, cancellationToken);
 
         if (Win32Native.IsWindow(deptDlgHwnd) && Win32Native.IsWindowVisible(deptDlgHwnd))
         {
             await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
-            await Task.Delay(200, cancellationToken);
+            await Task.Delay(250, cancellationToken);
         }
 
         var okBtn = children.FirstOrDefault(c => c.ClassName.Equals("Button", StringComparison.OrdinalIgnoreCase) &&
@@ -3809,6 +3841,18 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             int oby = (okBtn.Rect.Top + okBtn.Rect.Bottom) / 2;
             await Win32Native.ClickScreenPointAsync(obx, oby, cancellationToken);
             await Task.Delay(200, cancellationToken);
+        }
+
+        // Wait up to 3 seconds for dialog to close
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!Win32Native.IsWindow(deptDlgHwnd) || !Win32Native.IsWindowVisible(deptDlgHwnd))
+            {
+                FileLogger.Log("[OperateDeptSearch] 'Find แผนก' dialog closed successfully.");
+                return true;
+            }
+            await Task.Delay(150, cancellationToken);
         }
 
         return true;
@@ -3849,7 +3893,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         }
     }
 
-    private async Task<bool> ClickSaveDocumentAsync(
+    private async Task<(bool Success, string Message)> ClickSaveDocumentAsync(
         IntPtr childHwnd,
         Win32Native.RECT childRect,
         AutomationElement? purchaseElem,
@@ -3900,11 +3944,10 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_S, cancellationToken);
         await Task.Delay(500, cancellationToken);
 
-        await HandleSaveConfirmationPopupAsync(process, progress, cancellationToken);
-        return true;
+        return await HandleSaveConfirmationPopupAsync(process, progress, cancellationToken);
     }
 
-    private async Task HandleSaveConfirmationPopupAsync(
+    private async Task<(bool Success, string Message)> HandleSaveConfirmationPopupAsync(
         Process process,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
@@ -3936,14 +3979,18 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
             if (popupHwnd != IntPtr.Zero)
             {
-                FileLogger.Log($"[HandleSavePopup] Found popup HWND=0x{popupHwnd.ToInt64():X} Title='{popupTitle}'");
+                var msgList = new List<string>();
                 IntPtr confirmBtnHwnd = IntPtr.Zero;
                 Win32Native.EnumChildWindows(popupHwnd, (ch, _) =>
                 {
                     var cls = Win32Native.GetClass(ch);
                     var txt = Win32Native.GetText(ch);
                     var id = Win32Native.GetDlgCtrlID(ch);
-                    if (cls.Contains("Button", StringComparison.OrdinalIgnoreCase))
+                    if (cls.Equals("Static", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(txt))
+                    {
+                        msgList.Add(txt.Trim());
+                    }
+                    else if (cls.Contains("Button", StringComparison.OrdinalIgnoreCase))
                     {
                         if (txt.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
                             txt.Contains("ตกลง", StringComparison.OrdinalIgnoreCase) ||
@@ -3952,11 +3999,17 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                             id == 1 || id == 6)
                         {
                             confirmBtnHwnd = ch;
-                            return false;
                         }
                     }
                     return true;
                 }, IntPtr.Zero);
+
+                var fullPopupMsg = string.Join(" ", msgList);
+                FileLogger.Log($"[HandleSavePopup] Found popup HWND=0x{popupHwnd.ToInt64():X} Title='{popupTitle}' Message='{fullPopupMsg}'");
+
+                bool isWarningOrError = popupTitle.Contains("คำเตือน", StringComparison.OrdinalIgnoreCase) ||
+                                       popupTitle.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                                       popupTitle.Contains("ข้อผิดพลาด", StringComparison.OrdinalIgnoreCase);
 
                 if (confirmBtnHwnd != IntPtr.Zero)
                 {
@@ -3973,13 +4026,22 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                     await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
                 }
 
+                if (isWarningOrError)
+                {
+                    var warnText = string.IsNullOrWhiteSpace(fullPopupMsg) ? popupTitle : $"{popupTitle}: {fullPopupMsg}";
+                    Report(progress, $"ตรวจพบข้อความเตือนจาก Prosoft: '{warnText}'");
+                    FileLogger.Log($"[HandleSavePopup] Save resulted in warning/error: {warnText}");
+                    return (false, warnText);
+                }
+
                 Report(progress, $"ตรวจพบ Popup บันทึก: '{popupTitle}' — ดำเนินการยืนยันเรียบร้อย");
-                return;
+                return (true, popupTitle);
             }
 
             await Task.Delay(250, cancellationToken);
         }
 
         FileLogger.Log("[HandleSavePopup] No modal confirmation popup appeared (save completed directly).");
+        return (true, "บันทึกเอกสารเรียบร้อย");
     }
 }

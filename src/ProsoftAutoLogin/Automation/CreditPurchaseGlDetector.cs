@@ -26,7 +26,7 @@ internal static class CreditPurchaseGlDetector
     // Horizontal offsets from childRect.Left
     public const int EditGlCheckboxXOffset = 198;
     public const int PostSearchButtonXOffset = 615;
-    public const int SaveButtonXOffset = 105;
+    public const int SaveButtonXOffset = 85;
 
     // Column horizontal boundaries and centers (offsets from childRect.Left)
     public const int DepartmentColumnLeftOffset = 335;
