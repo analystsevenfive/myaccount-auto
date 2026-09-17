@@ -1988,7 +1988,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         }
 
         // Step 7: Fill Document Fields (เลขที่เอกสาร, เลขที่ใบกำกับ, เลขที่ใบส่งของ)
-        await FillDocumentFieldsAsync(childHwnd, childRect, vendorRow, progress, cancellationToken);
+        await FillDocumentFieldsAsync(childHwnd, childRect, vendorRow, process, progress, cancellationToken);
         await Task.Delay(300, cancellationToken);
 
         // Step 8: Switch back to "Detail" tab and fill items
@@ -2421,6 +2421,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         IntPtr childHwnd,
         Win32Native.RECT childRect,
         VendorCsvRecord vendorRow,
+        Process process,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
@@ -2494,11 +2495,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             await Task.Delay(150, cancellationToken);
         }
 
-        // 3. เลขที่ใบส่งของ (Delivery Order No)
+        // 3. เลขที่ใบส่งของ (Delivery Order No) with duplicate detection and auto /1, /2... retry
         if (!string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber))
         {
             FileLogger.Log($"[FillDocFields] Setting 'เลขที่ใบส่งของ' = '{vendorRow.DeliveryOrderNumber}' at ({doX}, {doY})...");
-            await SetFieldTextSafeAsync(doX, doY, vendorRow.DeliveryOrderNumber, cancellationToken);
+            await SetDeliveryOrderWithDuplicateHandlingAsync(process, childHwnd, doX, doY, vendorRow, progress, cancellationToken);
             await Task.Delay(150, cancellationToken);
         }
 
@@ -2523,6 +2524,156 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         // Commit to DataWindow buffer
         await Win32Native.SendKeyPressAsync(Win32Native.VK_TAB, cancellationToken);
+    }
+
+    private async Task<bool> SetDeliveryOrderWithDuplicateHandlingAsync(
+        Process process,
+        IntPtr childHwnd,
+        int doX,
+        int doY,
+        VendorCsvRecord vendorRow,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        string? baseDo = vendorRow.DeliveryOrderNumber;
+        if (string.IsNullOrWhiteSpace(baseDo)) return true;
+
+        FileLogger.Log($"[SetDeliveryOrder] Setting initial DO='{baseDo}' at ({doX}, {doY})...");
+        await SetFieldTextSafeAsync(doX, doY, baseDo, cancellationToken);
+
+        // Check if duplicate DO popup appears (wait up to 800ms)
+        var (dupPopup, title, msg) = await WaitForDuplicateDoPopupAsync(process, 800, cancellationToken);
+        if (dupPopup == IntPtr.Zero)
+        {
+            FileLogger.Log($"[SetDeliveryOrder] DO '{baseDo}' accepted without duplicate warning.");
+            return true;
+        }
+
+        FileLogger.Log($"[SetDeliveryOrder] Detected duplicate DO popup: Title='{title}' Message='{msg}'. Dismissing and looping with /1, /2, ...");
+        Report(progress, $"ตรวจพบ '{msg}': กำลังกด OK และแก้ไขเลขที่ใบส่งของ...");
+        await DismissDuplicateDoPopupAsync(dupPopup, cancellationToken);
+
+        int suffix = 1;
+        const int maxRetries = 50;
+        while (suffix <= maxRetries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string candidateDo = CreditPurchaseDocDetector.GenerateNextDeliveryOrderNumber(baseDo, suffix);
+            FileLogger.Log($"[SetDeliveryOrder] Attempt {suffix}: Trying candidate DO='{candidateDo}'...");
+            Report(progress, $"ลองเปลี่ยนเลขที่ใบส่งของเป็น '{candidateDo}'...");
+
+            if (childHwnd != IntPtr.Zero)
+            {
+                Win32Native.SetForegroundWindow(childHwnd);
+                await Task.Delay(50, cancellationToken);
+            }
+
+            // Click into field, select all, paste candidateDo, and commit with TAB
+            await SetFieldTextSafeAsync(doX, doY, candidateDo, cancellationToken);
+
+            var (newDupPopup, _, _) = await WaitForDuplicateDoPopupAsync(process, 700, cancellationToken);
+            if (newDupPopup != IntPtr.Zero)
+            {
+                FileLogger.Log($"[SetDeliveryOrder] DO '{candidateDo}' is also duplicate. Dismissing and trying next suffix...");
+                await DismissDuplicateDoPopupAsync(newDupPopup, cancellationToken);
+                suffix++;
+            }
+            else
+            {
+                FileLogger.Log($"[SetDeliveryOrder] DO '{candidateDo}' accepted successfully (no duplicate warning)!");
+                Report(progress, $"แก้ไขเลขที่ใบส่งของเป็น '{candidateDo}' สำเร็จ (ไม่ซ้ำ)");
+                vendorRow.DeliveryOrderNumber = candidateDo;
+                return true;
+            }
+        }
+
+        Report(progress, "คำเตือน: วนลูปเปลี่ยนเลขที่ใบส่งของครบ 50 ครั้งแล้ว");
+        return false;
+    }
+
+    private static async Task DismissDuplicateDoPopupAsync(IntPtr popupHwnd, CancellationToken cancellationToken)
+    {
+        if (popupHwnd == IntPtr.Zero) return;
+
+        Win32Native.SetForegroundWindow(popupHwnd);
+        await Task.Delay(50, cancellationToken);
+
+        IntPtr okBtn = Win32Native.FindOkButtonHwnd(popupHwnd);
+        if (okBtn != IntPtr.Zero)
+        {
+            Win32Native.ClickButtonHwnd(okBtn, popupHwnd);
+        }
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!Win32Native.IsWindow(popupHwnd) || !Win32Native.IsWindowVisible(popupHwnd))
+            {
+                break;
+            }
+            await Task.Delay(100, cancellationToken);
+        }
+        await Task.Delay(100, cancellationToken);
+    }
+
+    private static async Task<(IntPtr Hwnd, string Title, string Message)> WaitForDuplicateDoPopupAsync(
+        Process process,
+        int timeoutMs,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IntPtr foundHwnd = IntPtr.Zero;
+            string foundTitle = "";
+            string foundMsg = "";
+
+            Win32Native.EnumWindows((h, _) =>
+            {
+                uint pid;
+                Win32Native.GetWindowThreadProcessId(h, out pid);
+                if (pid == (uint)process.Id && Win32Native.IsWindowVisible(h))
+                {
+                    var cls = Win32Native.GetClass(h);
+                    var txt = Win32Native.GetText(h);
+                    if (cls == "#32770" || cls.Contains("FNWND", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var msgList = new List<string>();
+                        Win32Native.EnumChildWindows(h, (ch, _) =>
+                        {
+                            var chCls = Win32Native.GetClass(ch);
+                            var chTxt = Win32Native.GetText(ch);
+                            if (chCls.Equals("Static", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(chTxt))
+                            {
+                                msgList.Add(chTxt.Trim());
+                            }
+                            return true;
+                        }, IntPtr.Zero);
+
+                        var fullMsg = string.Join(" ", msgList);
+                        if (CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(fullMsg, txt))
+                        {
+                            foundHwnd = h;
+                            foundTitle = txt;
+                            foundMsg = fullMsg;
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            if (foundHwnd != IntPtr.Zero)
+            {
+                return (foundHwnd, foundTitle, foundMsg);
+            }
+
+            await Task.Delay(100, cancellationToken);
+        }
+
+        return (IntPtr.Zero, "", "");
     }
 
     private async Task<bool> SwitchToMoreTabAsync(

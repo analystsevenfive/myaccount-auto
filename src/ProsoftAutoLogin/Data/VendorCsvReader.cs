@@ -20,7 +20,10 @@ public sealed record VendorCsvRecord(
     string? DocumentNumber = null,
     string? TaxInvoiceNumber = null,
     string? DeliveryOrderNumber = null,
-    List<DetailItemRecord>? Items = null);
+    List<DetailItemRecord>? Items = null)
+{
+    public string? DeliveryOrderNumber { get; set; } = DeliveryOrderNumber;
+}
 
 public static class VendorCsvReader
 {

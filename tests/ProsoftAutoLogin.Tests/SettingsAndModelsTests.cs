@@ -1100,6 +1100,36 @@ public class SettingsAndModelsTests
         Assert.Equal((IntPtr)0x300, selectedOk.Hwnd);
         Assert.Equal(1, selectedOk.CtrlId);
     }
+
+    [Theory]
+    [InlineData("เลขที่ใบส่งของ เป็นค่าซ้ำ !!", "คำเตือน", true)]
+    [InlineData("เลขที่ใบส่งของ เป็นค่าซ้ำ", "คำเตือน", true)]
+    [InlineData("เลขที่ใบส่งของ มีค่าซ้ำในระบบ", "แจ้งเตือน", true)]
+    [InlineData("เลขที่เอกสารข้ามเลขที่ VC0926-00014-4 ต้องการบันทึกหรือไม่ ?", "คำเตือน", false)]
+    [InlineData("บันทึกข้อมูลเรียบร้อยแล้ว", "Information", false)]
+    public void CreditPurchaseDocDetector_IsDuplicateDeliveryOrderMessage_IdentifiesDuplicateDoMessages(
+        string message,
+        string title,
+        bool expected)
+    {
+        bool actual = CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(message, title);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("26NTSTH-SX040", 1, "26NTSTH-SX040/1")]
+    [InlineData("26NTSTH-SX040", 2, "26NTSTH-SX040/2")]
+    [InlineData("26NTSTH-SX040", 3, "26NTSTH-SX040/3")]
+    [InlineData("26NTSTH-SX040/1", 2, "26NTSTH-SX040/2")]
+    [InlineData("26NTSTH-SX040/2", 3, "26NTSTH-SX040/3")]
+    public void CreditPurchaseDocDetector_GenerateNextDeliveryOrderNumber_AppendsIncrementingSuffixes(
+        string baseDo,
+        int suffix,
+        string expected)
+    {
+        string actual = CreditPurchaseDocDetector.GenerateNextDeliveryOrderNumber(baseDo, suffix);
+        Assert.Equal(expected, actual);
+    }
 }
 
 

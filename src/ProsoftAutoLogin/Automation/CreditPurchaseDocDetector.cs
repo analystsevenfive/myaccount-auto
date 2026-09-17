@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Text.RegularExpressions;
 
 namespace ProsoftAutoLogin.Automation;
 
@@ -110,5 +111,26 @@ internal static class CreditPurchaseDocDetector
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Checks if a popup message indicates that the Delivery Order Number (เลขที่ใบส่งของ) is duplicate.
+    /// </summary>
+    public static bool IsDuplicateDeliveryOrderMessage(string message, string title)
+    {
+        var combined = (title + " " + message).Trim();
+        return (combined.Contains("ใบส่งของ", StringComparison.OrdinalIgnoreCase) && combined.Contains("ค่าซ้ำ", StringComparison.OrdinalIgnoreCase)) ||
+               combined.Contains("ใบส่งของ เป็นค่าซ้ำ", StringComparison.OrdinalIgnoreCase) ||
+               (combined.Contains("Delivery", StringComparison.OrdinalIgnoreCase) && combined.Contains("duplicate", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Computes the next delivery order number candidate with suffix /1, /2, etc.
+    /// </summary>
+    public static string GenerateNextDeliveryOrderNumber(string baseDeliveryOrder, int suffixIndex)
+    {
+        if (string.IsNullOrWhiteSpace(baseDeliveryOrder)) return "";
+        var cleanBase = Regex.Replace(baseDeliveryOrder.Trim(), @"/\d+$", "");
+        return suffixIndex <= 0 ? cleanBase : $"{cleanBase}/{suffixIndex}";
     }
 }
