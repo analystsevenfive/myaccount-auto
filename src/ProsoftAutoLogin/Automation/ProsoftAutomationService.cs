@@ -3905,7 +3905,9 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         CancellationToken cancellationToken)
     {
         FileLogger.Log("[HandleSavePopup] Checking for save confirmation popup...");
-        var deadline = DateTime.UtcNow.AddSeconds(4);
+        var deadline = DateTime.UtcNow.AddSeconds(8);
+        bool handledConfirmationPrompt = false;
+
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -3940,27 +3942,15 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                     await Task.Delay(300, cancellationToken);
                     continue;
                 }
+
                 var msgList = new List<string>();
-                IntPtr confirmBtnHwnd = IntPtr.Zero;
                 Win32Native.EnumChildWindows(popupHwnd, (ch, _) =>
                 {
                     var cls = Win32Native.GetClass(ch);
                     var txt = Win32Native.GetText(ch);
-                    var id = Win32Native.GetDlgCtrlID(ch);
                     if (cls.Equals("Static", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(txt))
                     {
                         msgList.Add(txt.Trim());
-                    }
-                    else if (cls.Contains("Button", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (txt.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
-                            txt.Contains("ตกลง", StringComparison.OrdinalIgnoreCase) ||
-                            txt.Contains("Yes", StringComparison.OrdinalIgnoreCase) ||
-                            txt.Contains("ใช่", StringComparison.OrdinalIgnoreCase) ||
-                            id == 1 || id == 6)
-                        {
-                            confirmBtnHwnd = ch;
-                        }
                     }
                     return true;
                 }, IntPtr.Zero);
@@ -3968,30 +3958,73 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 var fullPopupMsg = string.Join(" ", msgList);
                 FileLogger.Log($"[HandleSavePopup] Found popup HWND=0x{popupHwnd.ToInt64():X} Title='{popupTitle}' Message='{fullPopupMsg}'");
 
-                bool isWarningOrError = popupTitle.Contains("คำเตือน", StringComparison.OrdinalIgnoreCase) ||
-                                       popupTitle.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
-                                       popupTitle.Contains("ข้อผิดพลาด", StringComparison.OrdinalIgnoreCase);
+                bool isConfirmPrompt = CreditPurchaseGlDetector.IsSaveConfirmationPrompt(fullPopupMsg, popupTitle);
+                bool isWarningOrError = CreditPurchaseGlDetector.IsSaveWarningOrError(popupTitle, fullPopupMsg);
 
-                bool isSaveConfirmPrompt = fullPopupMsg.Contains("ต้องการบันทึกหรือไม่", StringComparison.OrdinalIgnoreCase) ||
-                                           fullPopupMsg.Contains("บันทึกหรือไม่", StringComparison.OrdinalIgnoreCase) ||
-                                           fullPopupMsg.Contains("ยืนยัน", StringComparison.OrdinalIgnoreCase);
+                IntPtr targetBtnHwnd = CreditPurchaseGlDetector.FindDialogButtonHwnd(popupHwnd, isConfirmPrompt);
 
-                if (confirmBtnHwnd != IntPtr.Zero)
+                if (isConfirmPrompt)
                 {
-                    FileLogger.Log($"[HandleSavePopup] Clicking confirm button HWND=0x{confirmBtnHwnd.ToInt64():X}...");
-                    Win32Native.GetWindowRect(confirmBtnHwnd, out var bRect);
+                    FileLogger.Log($"[HandleSavePopup] Save confirmation prompt detected ('{fullPopupMsg}'). Clicking 'Yes' button...");
+                    Report(progress, "ตรวจพบข้อความยืนยันการบันทึก: กำลังกด 'Yes'...");
+                }
+
+                Win32Native.SetForegroundWindow(popupHwnd);
+                await Task.Delay(100, cancellationToken);
+
+                if (targetBtnHwnd != IntPtr.Zero)
+                {
+                    FileLogger.Log($"[HandleSavePopup] Clicking target button HWND=0x{targetBtnHwnd.ToInt64():X}...");
+                    Win32Native.ClickButtonHwnd(targetBtnHwnd, popupHwnd);
+
+                    Win32Native.GetWindowRect(targetBtnHwnd, out var bRect);
                     int bx = (bRect.Left + bRect.Right) / 2;
                     int by = (bRect.Top + bRect.Bottom) / 2;
-                    await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
-                    await Task.Delay(300, cancellationToken);
+                    if (bx > 0 && by > 0)
+                    {
+                        await Win32Native.ClickScreenPointAsync(bx, by, cancellationToken);
+                    }
+                }
+
+                if (isConfirmPrompt)
+                {
+                    // Send 'Y' (0x59) or Enter to confirm Yes on standard MB_YESNO dialogs
+                    await Win32Native.SendKeyPressAsync(0x59, cancellationToken);
+                    await Task.Delay(100, cancellationToken);
+                    await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
                 }
                 else
                 {
-                    Win32Native.SetForegroundWindow(popupHwnd);
                     await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
                 }
 
-                if (isWarningOrError && !isSaveConfirmPrompt)
+                // Wait up to 3 seconds for popup to disappear, with retries if needed
+                var dismissDeadline = DateTime.UtcNow.AddSeconds(3);
+                int retry = 0;
+                while (DateTime.UtcNow < dismissDeadline)
+                {
+                    if (!Win32Native.IsWindow(popupHwnd) || !Win32Native.IsWindowVisible(popupHwnd))
+                    {
+                        FileLogger.Log($"[HandleSavePopup] Popup HWND=0x{popupHwnd.ToInt64():X} closed successfully.");
+                        break;
+                    }
+                    await Task.Delay(150, cancellationToken);
+                    retry++;
+                    if (retry % 3 == 0 && Win32Native.IsWindowVisible(popupHwnd))
+                    {
+                        if (targetBtnHwnd != IntPtr.Zero)
+                        {
+                            Win32Native.ClickButtonHwnd(targetBtnHwnd, popupHwnd);
+                        }
+                        if (isConfirmPrompt)
+                        {
+                            await Win32Native.SendKeyPressAsync(0x59, cancellationToken);
+                        }
+                        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+                    }
+                }
+
+                if (isWarningOrError)
                 {
                     var warnText = string.IsNullOrWhiteSpace(fullPopupMsg) ? popupTitle : $"{popupTitle}: {fullPopupMsg}";
                     Report(progress, $"ตรวจพบข้อความเตือนจาก Prosoft: '{warnText}'");
@@ -3999,7 +4032,22 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                     return (false, warnText);
                 }
 
+                if (isConfirmPrompt)
+                {
+                    handledConfirmationPrompt = true;
+                    Report(progress, $"ตรวจพบข้อความยืนยันการบันทึก: ดำเนินการกด 'Yes' เรียบร้อย");
+                    // Wait briefly and continue to check for potential follow-up popup (e.g. "บันทึกเรียบร้อย")
+                    await Task.Delay(500, cancellationToken);
+                    continue;
+                }
+
                 Report(progress, $"ตรวจพบ Popup บันทึก: '{popupTitle}' — ดำเนินการยืนยันเรียบร้อย");
+                return (true, "บันทึกเอกสารเรียบร้อย");
+            }
+
+            if (handledConfirmationPrompt)
+            {
+                FileLogger.Log("[HandleSavePopup] Save confirmation prompt handled and no subsequent modal dialog detected.");
                 return (true, "บันทึกเอกสารเรียบร้อย");
             }
 

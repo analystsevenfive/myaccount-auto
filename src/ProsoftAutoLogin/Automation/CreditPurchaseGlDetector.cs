@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 
 namespace ProsoftAutoLogin.Automation;
 
@@ -196,5 +198,101 @@ internal static class CreditPurchaseGlDetector
         }
 
         return darkPixels >= 5;
+    }
+
+    /// <summary>
+    /// Determines whether the popup message represents a confirmation prompt (such as "ข้ามเลขที่... ต้องการบันทึกหรือไม่ ?")
+    /// rather than a blocking error.
+    /// </summary>
+    public static bool IsSaveConfirmationPrompt(string message, string title)
+    {
+        var combined = (title + " " + message).Trim();
+        return combined.Contains("ต้องการบันทึกหรือไม่", StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains("บันทึกหรือไม่", StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains("ข้ามเลขที่", StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains("เลขที่เอกสารข้าม", StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains("ยืนยันการบันทึก", StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains("ยืนยัน", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Determines whether the popup message is a blocking error/warning dialog.
+    /// Returns false if it is a confirmation prompt that should be confirmed.
+    /// </summary>
+    public static bool IsSaveWarningOrError(string title, string message)
+    {
+        if (IsSaveConfirmationPrompt(message, title)) return false;
+
+        return title.Contains("คำเตือน", StringComparison.OrdinalIgnoreCase) ||
+               title.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+               title.Contains("ข้อผิดพลาด", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("ข้อผิดพลาด", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Selects the best button from a list of child buttons.
+    /// When isConfirmPrompt is true, it prioritizes Yes (IDYES=6 or text "Yes"/"ใช่") or the left button.
+    /// When isConfirmPrompt is false, it prioritizes OK (IDOK=1 or text "OK"/"ตกลง").
+    /// </summary>
+    public static Win32Native.ChildButtonInfo? SelectDialogButton(
+        IReadOnlyList<Win32Native.ChildButtonInfo> buttons,
+        bool isConfirmPrompt)
+    {
+        if (buttons == null || buttons.Count == 0) return null;
+
+        if (isConfirmPrompt)
+        {
+            // 1. Look for explicit Yes button (CtrlId == 6 / IDYES or text containing Yes/ใช่)
+            var yesBtn = buttons.FirstOrDefault(b =>
+                b.CtrlId == 6 ||
+                b.Text.Trim().Trim('&').Equals("Yes", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("Yes", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("ใช่", StringComparison.OrdinalIgnoreCase));
+            if (yesBtn != null) return yesBtn;
+
+            // 2. Standard MessageBox with Yes/No has 2 buttons: Yes on the left, No on the right
+            if (buttons.Count == 2)
+            {
+                return buttons.OrderBy(b => b.Rect.Left).First();
+            }
+
+            // 3. Fallback to OK
+            var okBtn = buttons.FirstOrDefault(b =>
+                b.CtrlId == 1 ||
+                b.Text.Trim().Trim('&').Equals("OK", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("ตกลง", StringComparison.OrdinalIgnoreCase));
+            if (okBtn != null) return okBtn;
+        }
+        else
+        {
+            // Standard notification/OK dialog:
+            var okBtn = buttons.FirstOrDefault(b =>
+                b.CtrlId == 1 ||
+                b.Text.Trim().Trim('&').Equals("OK", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("ตกลง", StringComparison.OrdinalIgnoreCase));
+            if (okBtn != null) return okBtn;
+
+            var yesBtn = buttons.FirstOrDefault(b =>
+                b.CtrlId == 6 ||
+                b.Text.Contains("Yes", StringComparison.OrdinalIgnoreCase) ||
+                b.Text.Contains("ใช่", StringComparison.OrdinalIgnoreCase));
+            if (yesBtn != null) return yesBtn;
+        }
+
+        if (buttons.Count == 1) return buttons[0];
+        return buttons.OrderBy(b => b.Rect.Left).First();
+    }
+
+    /// <summary>
+    /// Finds the HWND of the button to click on a save/confirmation dialog.
+    /// </summary>
+    public static IntPtr FindDialogButtonHwnd(IntPtr dialogHwnd, bool isConfirmPrompt)
+    {
+        if (dialogHwnd == IntPtr.Zero) return IntPtr.Zero;
+        var buttons = Win32Native.GetChildButtons(dialogHwnd);
+        var chosen = SelectDialogButton(buttons, isConfirmPrompt);
+        return chosen?.Hwnd ?? IntPtr.Zero;
     }
 }

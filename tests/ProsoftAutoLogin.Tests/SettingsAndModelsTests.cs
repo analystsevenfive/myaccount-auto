@@ -1039,6 +1039,67 @@ public class SettingsAndModelsTests
         Assert.Contains("Find", settings.Prosoft.Gl.FindDepartmentDialogTitleContains);
         Assert.Contains("แผนก", settings.Prosoft.Gl.FindDepartmentDialogTitleContains);
     }
+
+    [Theory]
+    [InlineData("เลขที่เอกสารข้ามเลขที่ VC0926-00014-4 ต้องการบันทึกหรือไม่ ?", "คำเตือน", true)]
+    [InlineData("ต้องการบันทึกหรือไม่ ?", "คำเตือน", true)]
+    [InlineData("เลขที่เอกสารข้ามเลขที่ VC0926-00014-4", "คำเตือน", true)]
+    [InlineData("ยืนยันการบันทึกข้อมูล", "ยืนยัน", true)]
+    [InlineData("บันทึกข้อมูลเรียบร้อยแล้ว", "Information", false)]
+    [InlineData("ยอดรวมเดบิตไม่เท่ากับยอดรวมเครดิต", "ข้อผิดพลาด", false)]
+    public void CreditPurchaseGlDetector_IsSaveConfirmationPrompt_IdentifiesConfirmationPrompts(
+        string message,
+        string title,
+        bool expected)
+    {
+        bool actual = CreditPurchaseGlDetector.IsSaveConfirmationPrompt(message, title);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("คำเตือน", "เลขที่เอกสารข้ามเลขที่ VC0926-00014-4 ต้องการบันทึกหรือไม่ ?", false)]
+    [InlineData("คำเตือน", "ไม่พบรหัสสินค้าที่ระบุในระบบ", true)]
+    [InlineData("ข้อผิดพลาด", "ยอดรวมเดบิตไม่เท่ากับยอดรวมเครดิต", true)]
+    [InlineData("Error", "เกิดข้อผิดพลาดในการบันทึกข้อมูล", true)]
+    public void CreditPurchaseGlDetector_IsSaveWarningOrError_DistinguishesConfirmationFromActualError(
+        string title,
+        string message,
+        bool expected)
+    {
+        bool actual = CreditPurchaseGlDetector.IsSaveWarningOrError(title, message);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void CreditPurchaseGlDetector_SelectDialogButton_SelectsYesButtonOnConfirmation()
+    {
+        var yesBtn = new Win32Native.ChildButtonInfo(
+            (IntPtr)0x100, "&Yes", "Button",
+            new Win32Native.RECT { Left = 200, Top = 300, Right = 270, Bottom = 330 }, 6);
+
+        var noBtn = new Win32Native.ChildButtonInfo(
+            (IntPtr)0x200, "&No", "Button",
+            new Win32Native.RECT { Left = 280, Top = 300, Right = 350, Bottom = 330 }, 7);
+
+        var buttons = new List<Win32Native.ChildButtonInfo> { yesBtn, noBtn };
+
+        // For confirmation prompt, must select Yes button
+        var selected = CreditPurchaseGlDetector.SelectDialogButton(buttons, isConfirmPrompt: true);
+        Assert.NotNull(selected);
+        Assert.Equal((IntPtr)0x100, selected.Hwnd);
+        Assert.Equal(6, selected.CtrlId);
+
+        // For non-confirmation dialog with OK button
+        var okBtn = new Win32Native.ChildButtonInfo(
+            (IntPtr)0x300, "OK", "Button",
+            new Win32Native.RECT { Left = 250, Top = 300, Right = 320, Bottom = 330 }, 1);
+
+        var okButtons = new List<Win32Native.ChildButtonInfo> { okBtn };
+        var selectedOk = CreditPurchaseGlDetector.SelectDialogButton(okButtons, isConfirmPrompt: false);
+        Assert.NotNull(selectedOk);
+        Assert.Equal((IntPtr)0x300, selectedOk.Hwnd);
+        Assert.Equal(1, selectedOk.CtrlId);
+    }
 }
 
 
