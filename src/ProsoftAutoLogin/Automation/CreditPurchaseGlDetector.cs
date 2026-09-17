@@ -20,7 +20,7 @@ internal static class CreditPurchaseGlDetector
 
     // Relative vertical offsets from childRect.Top on standard 789x479 Credit Purchase sheet
     public const int TopControlsYOffset = 185;
-    public const int FirstRowCenterOffset = 215;
+    public const int FirstRowCenterOffset = 227;
     public const int RowPitch = 17;
 
     // Horizontal offsets from childRect.Left
@@ -29,9 +29,15 @@ internal static class CreditPurchaseGlDetector
     public const int SaveButtonXOffset = 85;
 
     // Column horizontal boundaries and centers (offsets from childRect.Left)
-    public const int DepartmentColumnLeftOffset = 335;
-    public const int DepartmentColumnRightOffset = 430;
-    public const int DepartmentColumnCenterOffset = 382;
+    public const int DepartmentColumnLeftOffset = 324;
+    public const int DepartmentColumnRightOffset = 424;
+    public const int DepartmentColumnCenterOffset = 374;
+    public const int DepartmentDropdownArrowXOffset = 416;
+
+    // Relative offsets from detected green arrow button [ > ]
+    public const int GreenArrowToDeptDropdownDx = -186;
+    public const int GreenArrowToDeptDropdownDy = 42;
+    public const int GreenArrowToDeptCellDx = -235;
 
     /// <summary>
     /// Gets the click point for the "GL" tab at the bottom of the "ซื้อเชื่อ" window.
@@ -81,6 +87,36 @@ internal static class CreditPurchaseGlDetector
         };
 
         return new Point(colX, rowY);
+    }
+
+    /// <summary>
+    /// Gets the click point for the dropdown arrow [ v ] in column "แผนก" (Department).
+    /// </summary>
+    public static Point GetDepartmentDropdownLocation(Win32Native.RECT childRect, int rowIndex)
+    {
+        if (rowIndex < 1) rowIndex = 1;
+        int rowY = childRect.Top + FirstRowCenterOffset + (rowIndex - 1) * RowPitch;
+        return new Point(childRect.Left + DepartmentDropdownArrowXOffset, rowY);
+    }
+
+    /// <summary>
+    /// Gets the click point for the dropdown arrow [ v ] in column "แผนก" anchored to the detected green arrow button.
+    /// </summary>
+    public static Point GetDepartmentDropdownLocationFromGreenArrow(Point greenArrow, int rowIndex)
+    {
+        if (rowIndex < 1) rowIndex = 1;
+        int rowY = greenArrow.Y + GreenArrowToDeptDropdownDy + (rowIndex - 1) * RowPitch;
+        return new Point(greenArrow.X + GreenArrowToDeptDropdownDx, rowY);
+    }
+
+    /// <summary>
+    /// Gets the click point for the text box part in column "แผนก" anchored to the detected green arrow button.
+    /// </summary>
+    public static Point GetDepartmentCellLocationFromGreenArrow(Point greenArrow, int rowIndex)
+    {
+        if (rowIndex < 1) rowIndex = 1;
+        int rowY = greenArrow.Y + GreenArrowToDeptDropdownDy + (rowIndex - 1) * RowPitch;
+        return new Point(greenArrow.X + GreenArrowToDeptCellDx, rowY);
     }
 
     /// <summary>

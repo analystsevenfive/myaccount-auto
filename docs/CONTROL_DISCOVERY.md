@@ -57,3 +57,23 @@ UI Tree Exporter ไม่อ่าน `Value` ของ control จึงไม
 ```
 
 ไม่ควรลบ fallback เดิมจนกว่าจะทดสอบผ่านหลายครั้ง
+
+## Verified GL Tab and Save Controls
+
+- **GL Tab**: Index 4 (5th tab) ใน TabControl `pbtab32_80` หรือคลิกพิกัด `childRect.Left + 300`, `childRect.Bottom - 52`
+- **ปุ่ม Serch รูปแบบการ Post**: ปุ่มลูกศรสีเขียว `[ > ]` สแกนสีเขียวสด (`G > 150`) อ้างอิงจากตำแหน่งจริง
+- **Checkbox แก้ไข GL**: อยู่ทางซ้ายของปุ่ม [ > ] พิกัด `greenArrow.X - 418` ตรวจสอบสถานะ Checked ด้วยการนับพิกเซลสีดำด้านในกล่อง 13x13
+- **คอลัมน์ แผนก (Department)**:
+  - ความกว้างคอลัมน์: จาก `greenArrow.X - 278` ถึง `greenArrow.X - 183`
+  - ปุ่ม Dropdown `[ v ]`: อยู่ที่ `greenArrow.X - 186`, `greenArrow.Y + 42 + (row - 1) * 17`
+  - ช่องแก้ไขข้อความ (Cell Text Box): อยู่ที่ `greenArrow.X - 235`, `greenArrow.Y + 42 + (row - 1) * 17`
+  - **ข้อสังเกตสำคัญใน PowerBuilder DataWindow**:
+    - DataWindow ต้องถูกคลิกเพื่อโฟกัสก่อน แถวแรกจึงจะรับคีย์บอร์ดและแสดงปุ่ม Dropdown
+    - แถวที่ 1 จะมีค่าเริ่มต้นคือ `PURCHASE` ต้องใช้ **Double-Click** เพื่อไฮไลต์ทั้งคำ แล้วกด **Backspace** เพื่อล้างค่าให้กลายเป็นช่องว่างก่อน
+    - สลับภาษาเป็น English (US) แล้วกดเลือกจาก Dropdown ด้วยคีย์ `I` + `Enter`
+    - ยืนยันซ้ำด้วยการ Double-Click และวางผ่าน Clipboard (`Ctrl+V`) ด้วย `"INTER"` แล้วกด `Enter`
+- **ปุ่ม Save และ Popup ยืนยัน**:
+  - คลิกปุ่ม Save ที่ Toolbar ด้านล่าง `childRect.Left + 85`, `childRect.Bottom - 20` หรือ UIA Button `Save`
+  - **ห้ามใช้ `Ctrl+S`** เพราะใน PowerBuilder DataWindow คีย์นี้คือคำสั่ง "Specify Sort Columns"
+  - ตรวจจับ Popup ยืนยันบันทึก `#32770` (เช่น ข้อความเตือนเลขที่เอกสารข้าม) และกดปุ่มยืนยัน (`OK` / `Yes` / Button 1) อัตโนมัติ
+

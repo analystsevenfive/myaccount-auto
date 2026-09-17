@@ -933,12 +933,27 @@ public class SettingsAndModelsTests
 
         // Department column cells
         var r1Dept = CreditPurchaseGlDetector.GetCellLocation(childRect, 1, GlColumn.Department);
-        Assert.Equal(100 + 382, r1Dept.X);
-        Assert.Equal(50 + 215, r1Dept.Y);
+        Assert.Equal(100 + 374, r1Dept.X);
+        Assert.Equal(50 + 227, r1Dept.Y);
 
         var r2Dept = CreditPurchaseGlDetector.GetCellLocation(childRect, 2, GlColumn.Department);
-        Assert.Equal(100 + 382, r2Dept.X);
-        Assert.Equal(50 + 215 + 17, r2Dept.Y);
+        Assert.Equal(100 + 374, r2Dept.X);
+        Assert.Equal(50 + 227 + 17, r2Dept.Y);
+
+        // Department dropdown arrow [v] location
+        var r1Arrow = CreditPurchaseGlDetector.GetDepartmentDropdownLocation(childRect, 1);
+        Assert.Equal(100 + 416, r1Arrow.X);
+        Assert.Equal(50 + 227, r1Arrow.Y);
+
+        // Green arrow relative anchor tests
+        var greenPt = new System.Drawing.Point(605, 55);
+        var r1ArrowFromGreen = CreditPurchaseGlDetector.GetDepartmentDropdownLocationFromGreenArrow(greenPt, 1);
+        Assert.Equal(605 - 186, r1ArrowFromGreen.X);
+        Assert.Equal(55 + 42, r1ArrowFromGreen.Y);
+
+        var r1CellFromGreen = CreditPurchaseGlDetector.GetDepartmentCellLocationFromGreenArrow(greenPt, 1);
+        Assert.Equal(605 - 235, r1CellFromGreen.X);
+        Assert.Equal(55 + 42, r1CellFromGreen.Y);
 
         // Save button on bottom toolbar
         var saveBtn = CreditPurchaseGlDetector.GetDefaultSaveButtonLocation(childRect);

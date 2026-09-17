@@ -51,6 +51,32 @@ internal static class Win32Native
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr LoadKeyboardLayout(string pwszKLID, uint Flags);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr ActivateKeyboardLayout(IntPtr hkl, uint Flags);
+
+    public const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
+    public const uint KLF_ACTIVATE = 1;
+
+    public static void EnsureEnglishKeyboardLayout(IntPtr hWnd)
+    {
+        try
+        {
+            var englishHkl = LoadKeyboardLayout("00000409", KLF_ACTIVATE);
+            ActivateKeyboardLayout(englishHkl, KLF_ACTIVATE);
+            if (hWnd != IntPtr.Zero)
+            {
+                PostMessage(hWnd, WM_INPUTLANGCHANGEREQUEST, IntPtr.Zero, englishHkl);
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLogger.Log($"[EnsureEnglishKeyboardLayout] Notice: {ex.Message}");
+        }
+    }
+
     [DllImport("user32.dll")]
     public static extern IntPtr SetFocus(IntPtr hWnd);
 

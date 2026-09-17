@@ -32,9 +32,7 @@ secrets*.json
 publish/
 **/publish/
 
-## Scratch / Temporary Images
-scratch/*.png
-scratch/*.jpg
-scratch/*.bmp
+## Scratch
+scratch/
 
 
