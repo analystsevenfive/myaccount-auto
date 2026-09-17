@@ -292,7 +292,15 @@ internal static class CreditPurchaseGlDetector
     {
         if (dialogHwnd == IntPtr.Zero) return IntPtr.Zero;
         var buttons = Win32Native.GetChildButtons(dialogHwnd);
+        foreach (var b in buttons)
+        {
+            FileLogger.Log($"[FindDialogButton] HWND=0x{b.Hwnd.ToInt64():X} Text='{b.Text}' Id={b.CtrlId} Rect=({b.Rect.Left},{b.Rect.Top},{b.Rect.Right},{b.Rect.Bottom})");
+        }
         var chosen = SelectDialogButton(buttons, isConfirmPrompt);
+        if (chosen != null)
+        {
+            FileLogger.Log($"[FindDialogButton] Chosen: HWND=0x{chosen.Hwnd.ToInt64():X} Text='{chosen.Text}' Id={chosen.CtrlId}");
+        }
         return chosen?.Hwnd ?? IntPtr.Zero;
     }
 }

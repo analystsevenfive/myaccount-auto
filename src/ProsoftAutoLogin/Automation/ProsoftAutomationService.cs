@@ -4047,16 +4047,17 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         await Task.Delay(400, cancellationToken);
 
-        return await HandleSaveConfirmationPopupAsync(process, progress, cancellationToken);
+        return await HandleSaveConfirmationPopupAsync(childHwnd, process, progress, cancellationToken);
     }
 
     private async Task<(bool Success, string Message)> HandleSaveConfirmationPopupAsync(
+        IntPtr childHwnd,
         Process process,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
         FileLogger.Log("[HandleSavePopup] Checking for save confirmation popup...");
-        var deadline = DateTime.UtcNow.AddSeconds(8);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
         bool handledConfirmationPrompt = false;
 
         while (DateTime.UtcNow < deadline)
@@ -4070,30 +4071,24 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 Win32Native.GetWindowThreadProcessId(h, out pid);
                 if (pid == (uint)process.Id && Win32Native.IsWindowVisible(h))
                 {
+                    if (h == childHwnd) return true; // NEVER treat Credit Purchase window as a popup dialog!
+
                     var cls = Win32Native.GetClass(h);
                     var txt = Win32Native.GetText(h);
-                    if (cls == "#32770" || cls.Contains("FNWND", StringComparison.OrdinalIgnoreCase))
-                    {
-                        popupHwnd = h;
-                        popupTitle = txt;
-                        return false;
-                    }
+
+                    // Must be a standard modal dialog (#32770) and not the main sheet
+                    if (cls != "#32770") return true;
+                    if (txt.Equals("ซื้อเชื่อ", StringComparison.OrdinalIgnoreCase)) return true;
+
+                    popupHwnd = h;
+                    popupTitle = txt;
+                    return false;
                 }
                 return true;
             }, IntPtr.Zero);
 
             if (popupHwnd != IntPtr.Zero)
             {
-                // If "Specify Sort Columns" dialog appears, dismiss it with Escape
-                if (popupTitle.Contains("Specify Sort", StringComparison.OrdinalIgnoreCase))
-                {
-                    FileLogger.Log($"[HandleSavePopup] Dismissing unintended sort popup HWND=0x{popupHwnd.ToInt64():X}...");
-                    Win32Native.SetForegroundWindow(popupHwnd);
-                    await Win32Native.SendKeyPressAsync(0x1B, cancellationToken); // VK_ESCAPE
-                    await Task.Delay(300, cancellationToken);
-                    continue;
-                }
-
                 var msgList = new List<string>();
                 Win32Native.EnumChildWindows(popupHwnd, (ch, _) =>
                 {
@@ -4117,7 +4112,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 if (isConfirmPrompt)
                 {
                     FileLogger.Log($"[HandleSavePopup] Save confirmation prompt detected ('{fullPopupMsg}'). Clicking 'Yes' button...");
-                    Report(progress, "ตรวจพบข้อความยืนยันการบันทึก: กำลังกด 'Yes'...");
+                    Report(progress, "ตรวจพบข้อความเตือนเลขที่เอกสาร: กำลังกด 'Yes' เพื่อยืนยันการบันทึก...");
                 }
 
                 Win32Native.SetForegroundWindow(popupHwnd);
@@ -4139,9 +4134,9 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
                 if (isConfirmPrompt)
                 {
-                    // Send 'Y' (0x59) or Enter to confirm Yes on standard MB_YESNO dialogs
+                    // Send 'Y' (0x59) and Enter on standard MB_YESNO dialogs
                     await Win32Native.SendKeyPressAsync(0x59, cancellationToken);
-                    await Task.Delay(100, cancellationToken);
+                    await Task.Delay(50, cancellationToken);
                     await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
                 }
                 else
@@ -4186,10 +4181,54 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 if (isConfirmPrompt)
                 {
                     handledConfirmationPrompt = true;
-                    Report(progress, $"ตรวจพบข้อความยืนยันการบันทึก: ดำเนินการกด 'Yes' เรียบร้อย");
-                    // Wait briefly and continue to check for potential follow-up popup (e.g. "บันทึกเรียบร้อย")
-                    await Task.Delay(500, cancellationToken);
-                    continue;
+                    Report(progress, "กดยืนยัน 'Yes' เรียบร้อย กำลังรอการบันทึก...");
+                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting 1.5s to see if a follow-up dialog appears...");
+
+                    // Wait 1.5s for potential follow-up popup (like "บันทึกเรียบร้อย")
+                    var followUpDeadline = DateTime.UtcNow.AddMilliseconds(1500);
+                    while (DateTime.UtcNow < followUpDeadline)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        IntPtr followHwnd = IntPtr.Zero;
+                        string followTitle = "";
+                        Win32Native.EnumWindows((fh, _) =>
+                        {
+                            uint fpid;
+                            Win32Native.GetWindowThreadProcessId(fh, out fpid);
+                            if (fpid == (uint)process.Id && Win32Native.IsWindowVisible(fh))
+                            {
+                                if (fh == childHwnd) return true;
+                                var fcls = Win32Native.GetClass(fh);
+                                var ftxt = Win32Native.GetText(fh);
+                                if (fcls == "#32770" && !ftxt.Equals("ซื้อเชื่อ", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    followHwnd = fh;
+                                    followTitle = ftxt;
+                                    return false;
+                                }
+                            }
+                            return true;
+                        }, IntPtr.Zero);
+
+                        if (followHwnd != IntPtr.Zero)
+                        {
+                            FileLogger.Log($"[HandleSavePopup] Follow-up popup HWND=0x{followHwnd.ToInt64():X} Title='{followTitle}'. Confirming with OK...");
+                            Win32Native.SetForegroundWindow(followHwnd);
+                            IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
+                            if (okBtn != IntPtr.Zero)
+                            {
+                                Win32Native.ClickButtonHwnd(okBtn, followHwnd);
+                            }
+                            await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+                            await Task.Delay(300, cancellationToken);
+                            break;
+                        }
+
+                        await Task.Delay(150, cancellationToken);
+                    }
+
+                    FileLogger.Log("[HandleSavePopup] Save completed successfully.");
+                    return (true, "บันทึกเอกสารเรียบร้อย");
                 }
 
                 Report(progress, $"ตรวจพบ Popup บันทึก: '{popupTitle}' — ดำเนินการยืนยันเรียบร้อย");
