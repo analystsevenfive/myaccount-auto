@@ -101,6 +101,7 @@ internal static class Win32Native
     public const byte VK_RETURN = 0x0D;
     public const byte VK_SHIFT = 0x10;
     public const byte VK_CONTROL = 0x11;
+    public const byte VK_MENU = 0x12; // Alt key
     public const byte VK_SPACE = 0x20;
     public const byte VK_END = 0x23;
     public const byte VK_HOME = 0x24;
@@ -113,6 +114,7 @@ internal static class Win32Native
     public const byte VK_S = 0x53;
     public const byte VK_V = 0x56;
     public const byte VK_F2 = 0x70;
+    public const byte VK_F4 = 0x73;
 
     public static async Task SendKeyPressAsync(byte vk, CancellationToken cancellationToken = default)
     {

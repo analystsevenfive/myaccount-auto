@@ -4125,7 +4125,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         Process process,
         CancellationToken cancellationToken)
     {
-        // Calculate exact coordinates for the department dropdown button [ v ] and the cell
+        // Calculate exact coordinates for the department dropdown button [ v ] and the cell center
         int arrowX = greenArrowPoint.HasValue
             ? CreditPurchaseGlDetector.GetDepartmentDropdownLocationFromGreenArrow(greenArrowPoint.Value, rowIndex).X
             : CreditPurchaseGlDetector.GetDepartmentDropdownLocation(childRect, rowIndex).X;
@@ -4147,36 +4147,44 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Setting Department to '{departmentCode}' at cell=({cellX}, {cellY}), arrow=({arrowX}, {cellY})...");
 
-        // 1. Double-click inside cell text box: activates row and selects all existing text
-        await Win32Native.DoubleClickScreenPointAsync(cellX, cellY, cancellationToken);
-        await Task.Delay(200, cancellationToken);
-
-        // 2. Clear existing text with Ctrl+A + Backspace so cell is completely clean
-        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, 0x41, cancellationToken); // Ctrl+A
-        await Task.Delay(50, cancellationToken);
-        await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
-        await Task.Delay(100, cancellationToken);
-
-        // 3. Click directly on the dropdown button [ v ] to open dropdown list
-        await Win32Native.ClickScreenPointAsync(arrowX, cellY, cancellationToken);
-        await Task.Delay(250, cancellationToken);
-
-        // 4. Send key 'I' (0x49) to select INTER from the dropdown list, then Enter (0x0D) to confirm
-        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Selecting '{departmentCode}' from dropdown by key 'I' + Enter...");
-        await Win32Native.SendKeyPressAsync(0x49, cancellationToken); // VK_I
+        // 1. Click firmly inside cell center to focus this row and column
+        await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(150, cancellationToken);
+
+        // 2. Open dropdown list (both by clicking [ v ] button and sending Alt+Down / F4)
+        await Win32Native.ClickScreenPointAsync(arrowX, cellY, cancellationToken);
+        await Task.Delay(150, cancellationToken);
+
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_MENU, Win32Native.VK_DOWN, cancellationToken);
+        await Task.Delay(100, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_F4, cancellationToken);
+        await Task.Delay(150, cancellationToken);
+
+        // 3. Select department from dropdown by typing first letter ('I') and pressing Enter
+        byte firstCharKey = (byte)char.ToUpperInvariant(departmentCode[0]);
+        await Win32Native.SendKeyPressAsync(firstCharKey, cancellationToken);
+        await Task.Delay(100, cancellationToken);
         await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
         await Task.Delay(200, cancellationToken);
 
-        // 5. In addition, double-click cell and paste via clipboard (Ctrl+V) and commit with Tab
-        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Pasting '{departmentCode}' into cell at ({cellX}, {cellY})...");
-        await Win32Native.DoubleClickScreenPointAsync(cellX, cellY, cancellationToken);
+        // 4. Direct text typing fallback: in case column accepts direct text entry
+        await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(100, cancellationToken);
-        Win32Native.SetClipboardTextSafe(departmentCode);
-        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
-        await Task.Delay(100, cancellationToken);
-        await Win32Native.SendKeyPressAsync(Win32Native.VK_TAB, cancellationToken);
-        await Task.Delay(200, cancellationToken);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+        await Task.Delay(50, cancellationToken);
+        foreach (char c in departmentCode)
+        {
+            byte vk = (byte)char.ToUpperInvariant(c);
+            await Win32Native.SendKeyPressAsync(vk, cancellationToken);
+            await Task.Delay(25, cancellationToken);
+        }
+        await Task.Delay(80, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+        await Task.Delay(150, cancellationToken);
+
+        // 5. Commit row edit by pressing Enter
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
+        await Task.Delay(150, cancellationToken);
 
         FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Department '{departmentCode}' set successfully.");
     }
