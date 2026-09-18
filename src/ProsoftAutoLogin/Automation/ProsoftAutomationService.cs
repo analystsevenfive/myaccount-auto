@@ -4210,7 +4210,8 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         IntPtr buttonHwnd,
         IntPtr dialogHwnd,
         bool isYesButton,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool isNoButton = false)
     {
         if (buttonHwnd == IntPtr.Zero) return;
 
@@ -4257,6 +4258,12 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             {
                 FileLogger.Log($"[ClickDialogButtonCleanly] Dialog still open; sending WM_COMMAND IDYES (6)...");
                 Win32Native.SendMessage(dialogHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)6, buttonHwnd);
+                await Task.Delay(150, cancellationToken);
+            }
+            else if (isNoButton && Win32Native.IsWindow(dialogHwnd) && Win32Native.IsWindowVisible(dialogHwnd))
+            {
+                FileLogger.Log($"[ClickDialogButtonCleanly] Dialog still open; sending WM_COMMAND IDNO (7)...");
+                Win32Native.SendMessage(dialogHwnd, (uint)Win32Native.WM_COMMAND, (IntPtr)7, buttonHwnd);
                 await Task.Delay(150, cancellationToken);
             }
         }
@@ -4317,6 +4324,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 FileLogger.Log($"[HandleSavePopup] Found popup HWND=0x{popupHwnd.ToInt64():X} Title='{popupTitle}' Message='{fullPopupMsg}'");
 
                 bool isDuplicateDo = CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(fullPopupMsg, popupTitle);
+                bool isDepositDeduction = CreditPurchaseGlDetector.IsDepositDeductionPrompt(fullPopupMsg, popupTitle);
                 bool isConfirmPrompt = CreditPurchaseGlDetector.IsSaveConfirmationPrompt(fullPopupMsg, popupTitle);
                 bool isWarningOrError = CreditPurchaseGlDetector.IsSaveWarningOrError(popupTitle, fullPopupMsg);
 
@@ -4335,6 +4343,112 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                     return (false, true, warnText);
                 }
 
+                if (isDepositDeduction)
+                {
+                    FileLogger.Log($"[HandleSavePopup] Primary popup is Deposit deduction prompt ('{fullPopupMsg}'). Clicking 'No' button per user requirement...");
+                    Report(progress, "ตรวจพบคำถาม 'ท่านมีจำนวนเงินตัดมัดจำต้องการใช้หรือไม่': กำลังกด 'No'...");
+
+                    IntPtr noBtn = CreditPurchaseGlDetector.FindNoButtonHwnd(popupHwnd);
+                    if (noBtn == IntPtr.Zero) noBtn = targetBtnHwnd;
+
+                    await Task.Delay(1500, cancellationToken);
+                    if (noBtn != IntPtr.Zero)
+                    {
+                        await ClickDialogButtonCleanlyAsync(noBtn, popupHwnd, isYesButton: false, cancellationToken, isNoButton: true);
+                    }
+
+                    handledConfirmationPrompt = true;
+                    Report(progress, "กด 'No' เรียบร้อย กำลังรอผลการตรวจสอบและบันทึก...");
+                    FileLogger.Log("[HandleSavePopup] No confirmed on deposit deduction prompt. Waiting up to 8s for follow-up validation popup...");
+
+                    var followUpDeadline = DateTime.UtcNow.AddSeconds(8);
+                    while (DateTime.UtcNow < followUpDeadline)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        IntPtr followHwnd = IntPtr.Zero;
+                        string followTitle = "";
+                        Win32Native.EnumWindows((fh, _) =>
+                        {
+                            uint fpid;
+                            Win32Native.GetWindowThreadProcessId(fh, out fpid);
+                            if (fpid == (uint)process.Id && Win32Native.IsWindowVisible(fh))
+                            {
+                                if (fh == childHwnd) return true;
+                                if (fh == popupHwnd) return true;
+                                var fcls = Win32Native.GetClass(fh);
+                                var ftxt = Win32Native.GetText(fh);
+                                if (fcls == "#32770" && !ftxt.Equals("ซื้อเชื่อ", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    followHwnd = fh;
+                                    followTitle = ftxt;
+                                    return false;
+                                }
+                            }
+                            return true;
+                        }, IntPtr.Zero);
+
+                        if (followHwnd != IntPtr.Zero)
+                        {
+                            var followMsgs = new List<string>();
+                            Win32Native.EnumChildWindows(followHwnd, (fch, _) =>
+                            {
+                                var fcls = Win32Native.GetClass(fch);
+                                var ftxt = Win32Native.GetText(fch);
+                                if (fcls.Equals("Static", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(ftxt))
+                                {
+                                    followMsgs.Add(ftxt.Trim());
+                                }
+                                return true;
+                            }, IntPtr.Zero);
+                            var fullFollowMsg = string.Join(" ", followMsgs);
+
+                            FileLogger.Log($"[HandleSavePopup] Follow-up popup HWND=0x{followHwnd.ToInt64():X} Title='{followTitle}' Message='{fullFollowMsg}'.");
+                            Report(progress, $"ตรวจพบข้อความแจ้งเตือน: '{followTitle}: {fullFollowMsg}'");
+
+                            bool followIsDup = CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(fullFollowMsg, followTitle);
+                            bool followIsError = CreditPurchaseGlDetector.IsSaveWarningOrError(followTitle, fullFollowMsg);
+
+                            if (followIsDup)
+                            {
+                                await Task.Delay(2000, cancellationToken);
+                                IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
+                                if (okBtn != IntPtr.Zero)
+                                {
+                                    await ClickDialogButtonCleanlyAsync(okBtn, followHwnd, isYesButton: false, cancellationToken);
+                                }
+                                FileLogger.Log($"[HandleSavePopup] Follow-up popup was Duplicate DO: '{followTitle}: {fullFollowMsg}'.");
+                                return (false, true, $"{followTitle}: {fullFollowMsg}");
+                            }
+
+                            if (followIsError)
+                            {
+                                await Task.Delay(2000, cancellationToken);
+                                IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
+                                if (okBtn != IntPtr.Zero)
+                                {
+                                    await ClickDialogButtonCleanlyAsync(okBtn, followHwnd, isYesButton: false, cancellationToken);
+                                }
+                                FileLogger.Log($"[HandleSavePopup] Follow-up popup was warning/error: '{followTitle}: {fullFollowMsg}'.");
+                                return (false, false, $"{followTitle}: {fullFollowMsg}");
+                            }
+
+                            // Follow-up was an informational popup (e.g. "บันทึกเรียบร้อย")
+                            IntPtr okBtnInfo = Win32Native.FindOkButtonHwnd(followHwnd);
+                            if (okBtnInfo != IntPtr.Zero)
+                            {
+                                await ClickDialogButtonCleanlyAsync(okBtnInfo, followHwnd, isYesButton: false, cancellationToken);
+                            }
+                            FileLogger.Log("[HandleSavePopup] Follow-up popup dismissed. Save completed.");
+                            return (true, false, "บันทึกเอกสารเรียบร้อย");
+                        }
+
+                        await Task.Delay(200, cancellationToken);
+                    }
+
+                    FileLogger.Log("[HandleSavePopup] Save completed successfully after deposit prompt dismissed with No.");
+                    return (true, false, "บันทึกเอกสารเรียบร้อย");
+                }
+
                 if (isConfirmPrompt)
                 {
                     FileLogger.Log($"[HandleSavePopup] Save confirmation prompt detected ('{fullPopupMsg}'). Clicking 'Yes' button cleanly...");
@@ -4344,9 +4458,9 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
                     handledConfirmationPrompt = true;
                     Report(progress, "กดยืนยัน 'Yes' เรียบร้อย กำลังรอผลการตรวจสอบและบันทึก...");
-                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting up to 8s for follow-up validation popup (e.g. 'เลขที่ใบส่งของ เป็นค่าซ้ำ !!')...");
+                    FileLogger.Log("[HandleSavePopup] Yes confirmed. Waiting up to 8s for follow-up validation popup (e.g. 'เลขที่ใบส่งของ เป็นค่าซ้ำ !!' or 'ท่านมีจำนวนเงินตัดมัดจำต้องการใช้หรือไม่')...");
 
-                    // Wait up to 8s for potential follow-up popup (like "คำเตือน: เลขที่ใบส่งของ เป็นค่าซ้ำ !!")
+                    // Wait up to 8s for potential follow-up popup (like "คำเตือน: เลขที่ใบส่งของ เป็นค่าซ้ำ !!" or "คำเตือน: ท่านมีจำนวนเงินตัดมัดจำต้องการใช้หรือไม่")
                     var followUpDeadline = DateTime.UtcNow.AddSeconds(8);
                     while (DateTime.UtcNow < followUpDeadline)
                     {
@@ -4392,31 +4506,61 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                             FileLogger.Log($"[HandleSavePopup] Follow-up popup HWND=0x{followHwnd.ToInt64():X} Title='{followTitle}' Message='{fullFollowMsg}'.");
                             Report(progress, $"ตรวจพบข้อความแจ้งเตือน: '{followTitle}: {fullFollowMsg}'");
 
-                            // Crucial: Pause 2.0 seconds so user clearly sees the warning popup on screen!
-                            await Task.Delay(2000, cancellationToken);
-
-                            IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
-                            if (okBtn != IntPtr.Zero)
-                            {
-                                await ClickDialogButtonCleanlyAsync(okBtn, followHwnd, isYesButton: false, cancellationToken);
-                            }
-                            await Task.Delay(300, cancellationToken);
-
                             bool followIsDup = CreditPurchaseDocDetector.IsDuplicateDeliveryOrderMessage(fullFollowMsg, followTitle);
+                            bool followIsDeposit = CreditPurchaseGlDetector.IsDepositDeductionPrompt(fullFollowMsg, followTitle);
+                            bool followIsError = CreditPurchaseGlDetector.IsSaveWarningOrError(followTitle, fullFollowMsg);
+
+                            if (followIsDeposit)
+                            {
+                                FileLogger.Log($"[HandleSavePopup] Follow-up popup was Deposit deduction prompt: '{followTitle}: {fullFollowMsg}'. Clicking 'No' button per user requirement...");
+                                Report(progress, $"ตรวจพบคำเตือน: '{fullFollowMsg}': กำลังกด 'No' เพื่อไม่ใช้เงินมัดจำ...");
+
+                                await Task.Delay(1500, cancellationToken);
+                                IntPtr noBtn = CreditPurchaseGlDetector.FindNoButtonHwnd(followHwnd);
+                                if (noBtn == IntPtr.Zero) noBtn = Win32Native.FindOkButtonHwnd(followHwnd);
+
+                                if (noBtn != IntPtr.Zero)
+                                {
+                                    await ClickDialogButtonCleanlyAsync(noBtn, followHwnd, isYesButton: false, cancellationToken, isNoButton: true);
+                                }
+                                await Task.Delay(500, cancellationToken);
+
+                                // Keep waiting up to 8 more seconds for the final popup (such as "บันทึกเรียบร้อย")
+                                followUpDeadline = DateTime.UtcNow.AddSeconds(8);
+                                continue;
+                            }
+
                             if (followIsDup)
                             {
+                                // Pause so user clearly sees the duplicate warning popup
+                                await Task.Delay(2000, cancellationToken);
+                                IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
+                                if (okBtn != IntPtr.Zero)
+                                {
+                                    await ClickDialogButtonCleanlyAsync(okBtn, followHwnd, isYesButton: false, cancellationToken);
+                                }
                                 FileLogger.Log($"[HandleSavePopup] Follow-up popup was Duplicate DO: '{followTitle}: {fullFollowMsg}'.");
                                 return (false, true, $"{followTitle}: {fullFollowMsg}");
                             }
 
-                            bool followIsError = CreditPurchaseGlDetector.IsSaveWarningOrError(followTitle, fullFollowMsg);
                             if (followIsError)
                             {
+                                await Task.Delay(2000, cancellationToken);
+                                IntPtr okBtn = Win32Native.FindOkButtonHwnd(followHwnd);
+                                if (okBtn != IntPtr.Zero)
+                                {
+                                    await ClickDialogButtonCleanlyAsync(okBtn, followHwnd, isYesButton: false, cancellationToken);
+                                }
                                 FileLogger.Log($"[HandleSavePopup] Follow-up popup was warning/error: '{followTitle}: {fullFollowMsg}'.");
                                 return (false, false, $"{followTitle}: {fullFollowMsg}");
                             }
 
                             // Follow-up was an informational popup (e.g. "บันทึกเรียบร้อย")
+                            IntPtr okBtnInfo = Win32Native.FindOkButtonHwnd(followHwnd);
+                            if (okBtnInfo != IntPtr.Zero)
+                            {
+                                await ClickDialogButtonCleanlyAsync(okBtnInfo, followHwnd, isYesButton: false, cancellationToken);
+                            }
                             FileLogger.Log("[HandleSavePopup] Follow-up popup dismissed. Save completed.");
                             return (true, false, "บันทึกเอกสารเรียบร้อย");
                         }

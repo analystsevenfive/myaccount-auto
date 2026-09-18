@@ -1069,6 +1069,7 @@ public class SettingsAndModelsTests
 
     [Theory]
     [InlineData("คำเตือน", "เลขที่เอกสารข้ามเลขที่ VC0926-00014-4 ต้องการบันทึกหรือไม่ ?", false)]
+    [InlineData("คำเตือน", "ท่านมีจำนวนเงินตัดมัดจำต้องการใช้หรือไม่", false)]
     [InlineData("คำเตือน", "ไม่พบรหัสสินค้าที่ระบุในระบบ", true)]
     [InlineData("ข้อผิดพลาด", "ยอดรวมเดบิตไม่เท่ากับยอดรวมเครดิต", true)]
     [InlineData("Error", "เกิดข้อผิดพลาดในการบันทึกข้อมูล", true)]
@@ -1078,6 +1079,20 @@ public class SettingsAndModelsTests
         bool expected)
     {
         bool actual = CreditPurchaseGlDetector.IsSaveWarningOrError(title, message);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("ท่านมีจำนวนเงินตัดมัดจำต้องการใช้หรือไม่", "คำเตือน", true)]
+    [InlineData("มีรายการตัดมัดจำ", "คำเตือน", true)]
+    [InlineData("เลขที่เอกสารข้ามเลขที่ VC0926-00014-4 ต้องการบันทึกหรือไม่ ?", "คำเตือน", false)]
+    [InlineData("บันทึกข้อมูลเรียบร้อยแล้ว", "Information", false)]
+    public void CreditPurchaseGlDetector_IsDepositDeductionPrompt_IdentifiesDepositPrompts(
+        string message,
+        string title,
+        bool expected)
+    {
+        bool actual = CreditPurchaseGlDetector.IsDepositDeductionPrompt(message, title);
         Assert.Equal(expected, actual);
     }
 

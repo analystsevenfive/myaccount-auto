@@ -216,12 +216,25 @@ internal static class CreditPurchaseGlDetector
     }
 
     /// <summary>
+    /// Determines whether the popup message asks about advance payment / deposit deduction:
+    /// e.g. "ท่านมีจำนวนเงินตัดมัดจำต้องการใช้หรือไม่"
+    /// When this prompt appears, user requirement specifies clicking "No" (IDNO = 7).
+    /// </summary>
+    public static bool IsDepositDeductionPrompt(string message, string title)
+    {
+        var combined = (title + " " + message).Trim();
+        return combined.Contains("ตัดมัดจำ", StringComparison.OrdinalIgnoreCase) ||
+               combined.Contains("เงินตัดมัดจำ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Determines whether the popup message is a blocking error/warning dialog.
-    /// Returns false if it is a confirmation prompt that should be confirmed.
+    /// Returns false if it is a confirmation prompt or deposit deduction prompt that can be answered.
     /// </summary>
     public static bool IsSaveWarningOrError(string title, string message)
     {
         if (IsSaveConfirmationPrompt(message, title)) return false;
+        if (IsDepositDeductionPrompt(message, title)) return false;
 
         return title.Contains("คำเตือน", StringComparison.OrdinalIgnoreCase) ||
                title.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
@@ -283,6 +296,40 @@ internal static class CreditPurchaseGlDetector
 
         if (buttons.Count == 1) return buttons[0];
         return buttons.OrderBy(b => b.Rect.Left).First();
+    }
+
+    /// <summary>
+    /// Finds the HWND of the "No" button on a confirmation/prompt dialog.
+    /// Prioritizes IDNO (7) or text "No" / "ไม่ใช่". On 2-button dialogs, No is typically on the right.
+    /// </summary>
+    public static IntPtr FindNoButtonHwnd(IntPtr dialogHwnd)
+    {
+        if (dialogHwnd == IntPtr.Zero) return IntPtr.Zero;
+        var buttons = Win32Native.GetChildButtons(dialogHwnd);
+        foreach (var b in buttons)
+        {
+            FileLogger.Log($"[FindNoButton] HWND=0x{b.Hwnd.ToInt64():X} Text='{b.Text}' Id={b.CtrlId} Rect=({b.Rect.Left},{b.Rect.Top},{b.Rect.Right},{b.Rect.Bottom})");
+        }
+
+        var noBtn = buttons.FirstOrDefault(b =>
+            b.CtrlId == 7 ||
+            b.Text.Trim().Trim('&').Equals("No", StringComparison.OrdinalIgnoreCase) ||
+            b.Text.Contains("No", StringComparison.OrdinalIgnoreCase) ||
+            b.Text.Contains("ไม่ใช่", StringComparison.OrdinalIgnoreCase));
+        if (noBtn != null)
+        {
+            FileLogger.Log($"[FindNoButton] Chosen No button: HWND=0x{noBtn.Hwnd.ToInt64():X} Text='{noBtn.Text}' Id={noBtn.CtrlId}");
+            return noBtn.Hwnd;
+        }
+
+        if (buttons.Count == 2)
+        {
+            var rightBtn = buttons.OrderBy(b => b.Rect.Left).Last();
+            FileLogger.Log($"[FindNoButton] Selected right button as No: HWND=0x{rightBtn.Hwnd.ToInt64():X} Text='{rightBtn.Text}' Id={rightBtn.CtrlId}");
+            return rightBtn.Hwnd;
+        }
+
+        return IntPtr.Zero;
     }
 
     /// <summary>
