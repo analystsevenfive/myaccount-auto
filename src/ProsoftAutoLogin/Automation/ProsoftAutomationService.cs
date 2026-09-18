@@ -2484,7 +2484,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         if (!string.IsNullOrWhiteSpace(vendorRow.DocumentNumber))
         {
             FileLogger.Log($"[FillDocFields] Setting 'เลขที่เอกสาร' = '{vendorRow.DocumentNumber}' at ({docX}, {docY})...");
-            await SetFieldTextSafeAsync(docX, docY, vendorRow.DocumentNumber, cancellationToken);
+            await SetFieldTextSafeAsync(docX, docY, vendorRow.DocumentNumber, cancellationToken, childHwnd);
             await Task.Delay(150, cancellationToken);
         }
 
@@ -2492,7 +2492,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         if (!string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber))
         {
             FileLogger.Log($"[FillDocFields] Setting 'เลขที่ใบกำกับ' = '{vendorRow.TaxInvoiceNumber}' at ({taxX}, {taxY})...");
-            await SetFieldTextSafeAsync(taxX, taxY, vendorRow.TaxInvoiceNumber, cancellationToken);
+            await SetFieldTextSafeAsync(taxX, taxY, vendorRow.TaxInvoiceNumber, cancellationToken, childHwnd);
             await Task.Delay(150, cancellationToken);
         }
 
@@ -2508,22 +2508,71 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         return true;
     }
 
-    private static async Task SetFieldTextSafeAsync(int x, int y, string text, CancellationToken cancellationToken)
+    private static async Task SetFieldTextSafeAsync(
+        int x,
+        int y,
+        string text,
+        CancellationToken cancellationToken,
+        IntPtr targetHwnd = default)
     {
-        // Click inside edit box to focus
-        await Win32Native.ClickScreenPointAsync(x, y, cancellationToken);
-        await Task.Delay(100, cancellationToken);
+        // 1. Ensure English keyboard layout so shortcut and navigation keys behave consistently
+        if (targetHwnd != IntPtr.Zero)
+        {
+            Win32Native.EnsureEnglishKeyboardLayout(targetHwnd);
+        }
+        else
+        {
+            Win32Native.EnsureEnglishKeyboardLayout(IntPtr.Zero);
+        }
 
-        // Select all
+        // 2. Click inside edit box to focus and place caret
+        await Win32Native.ClickScreenPointAsync(x, y, cancellationToken);
+        await Task.Delay(80, cancellationToken);
+
+        // 3. Double-click inside box to select word/content in PowerBuilder
+        await Win32Native.DoubleClickScreenPointAsync(x, y, cancellationToken);
+        await Task.Delay(80, cancellationToken);
+
+        // 4. Robust multi-stage clear (PowerBuilder DataWindow doesn't always honor Ctrl+A):
+        //    a) Ctrl+A -> Backspace
         await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+
+        //    b) End -> Shift+Home -> Backspace
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_END, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_SHIFT, Win32Native.VK_HOME, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+
+        //    c) Home -> Shift+End -> Delete
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_HOME, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_SHIFT, Win32Native.VK_END, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_DELETE, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+
+        //    d) Backspace and Delete sweep to ensure completely blank
+        for (int i = 0; i < 20; i++)
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+        }
+        for (int i = 0; i < 20; i++)
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_DELETE, cancellationToken);
+        }
         await Task.Delay(50, cancellationToken);
 
-        // Set text via clipboard paste
+        // 5. Set text via clipboard paste
         Win32Native.SetClipboardTextSafe(text);
         await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
         await Task.Delay(100, cancellationToken);
 
-        // Commit to DataWindow buffer
+        // 6. Commit to DataWindow buffer
         await Win32Native.SendKeyPressAsync(Win32Native.VK_TAB, cancellationToken);
     }
 
@@ -2540,7 +2589,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         if (string.IsNullOrWhiteSpace(baseDo)) return true;
 
         FileLogger.Log($"[SetDeliveryOrder] Setting initial DO='{baseDo}' at ({doX}, {doY})...");
-        await SetFieldTextSafeAsync(doX, doY, baseDo, cancellationToken);
+        await SetFieldTextSafeAsync(doX, doY, baseDo, cancellationToken, childHwnd);
 
         // Check if duplicate DO popup appears (wait up to 800ms)
         var (dupPopup, title, msg) = await WaitForDuplicateDoPopupAsync(process, 800, cancellationToken);
@@ -2570,7 +2619,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             }
 
             // Click into field, select all, paste candidateDo, and commit with TAB
-            await SetFieldTextSafeAsync(doX, doY, candidateDo, cancellationToken);
+            await SetFieldTextSafeAsync(doX, doY, candidateDo, cancellationToken, childHwnd);
 
             var (newDupPopup, _, _) = await WaitForDuplicateDoPopupAsync(process, 700, cancellationToken);
             if (newDupPopup != IntPtr.Zero)
@@ -3707,7 +3756,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                     }
 
                     // Click into DO field, paste candidateDo, and TAB
-                    await SetFieldTextSafeAsync(doX, doY, candidateDo, cancellationToken);
+                    await SetFieldTextSafeAsync(doX, doY, candidateDo, cancellationToken, childHwnd);
                     if (vendorRow != null)
                     {
                         vendorRow.DeliveryOrderNumber = candidateDo;

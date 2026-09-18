@@ -99,11 +99,14 @@ internal static class Win32Native
     public const byte VK_BACK = 0x08;
     public const byte VK_TAB = 0x09;
     public const byte VK_RETURN = 0x0D;
+    public const byte VK_SHIFT = 0x10;
     public const byte VK_CONTROL = 0x11;
     public const byte VK_SPACE = 0x20;
+    public const byte VK_END = 0x23;
     public const byte VK_HOME = 0x24;
     public const byte VK_UP = 0x26;
     public const byte VK_DOWN = 0x28;
+    public const byte VK_DELETE = 0x2E;
     public const byte VK_A = 0x41;
     public const byte VK_C = 0x43;
     public const byte VK_N = 0x4E;
