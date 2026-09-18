@@ -1842,36 +1842,56 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         var vOptions = _options.VendorInput;
         var effectivePath = string.IsNullOrWhiteSpace(csvPath) ? vOptions.CsvPath : csvPath;
 
-        Report(progress, $"กำลังอ่านข้อมูลผู้ขายจาก '{effectivePath}'...");
-        VendorCsvRecord? vendorRow;
+        Report(progress, $"กำลังอ่านข้อมูลผู้ขายและเอกสารจาก '{effectivePath}' (เฉพาะ status = '{vOptions.RequiredStatus}')...");
+        List<VendorCsvRecord> approvedDocs;
+        int totalDocCount = 0;
         try
         {
-            vendorRow = VendorCsvReader.ReadFirstVendor(
-                effectivePath,
-                vOptions.VendorNameColumn,
-                vOptions.VendorCodeColumn,
-                vOptions.DocumentNumberColumn,
-                vOptions.TaxInvoiceNumberColumn,
-                vOptions.DeliveryOrderNumberColumn,
-                vOptions.ItemCodeColumn,
-                vOptions.QuantityColumn,
-                vOptions.UnitPriceColumn,
-                vOptions.WarehouseColumn,
-                vOptions.LocationColumn,
-                vOptions.DiscountColumn);
+            var allDocs = VendorCsvReader.ReadAllVendors(
+                filePath: effectivePath,
+                nameColumn: vOptions.VendorNameColumn,
+                codeColumn: vOptions.VendorCodeColumn,
+                docNoColumn: vOptions.DocumentNumberColumn,
+                taxInvoiceColumn: vOptions.TaxInvoiceNumberColumn,
+                deliveryOrderColumn: vOptions.DeliveryOrderNumberColumn,
+                itemCodeColumn: vOptions.ItemCodeColumn,
+                quantityColumn: vOptions.QuantityColumn,
+                unitPriceColumn: vOptions.UnitPriceColumn,
+                warehouseColumn: vOptions.WarehouseColumn,
+                locationColumn: vOptions.LocationColumn,
+                discountColumn: vOptions.DiscountColumn,
+                statusColumn: vOptions.StatusColumn);
+
+            totalDocCount = allDocs.Count;
+            approvedDocs = VendorCsvReader.ReadApprovedDocuments(
+                filePath: effectivePath,
+                requiredStatus: vOptions.RequiredStatus,
+                statusColumn: vOptions.StatusColumn,
+                nameColumn: vOptions.VendorNameColumn,
+                codeColumn: vOptions.VendorCodeColumn,
+                docNoColumn: vOptions.DocumentNumberColumn,
+                taxInvoiceColumn: vOptions.TaxInvoiceNumberColumn,
+                deliveryOrderColumn: vOptions.DeliveryOrderNumberColumn,
+                itemCodeColumn: vOptions.ItemCodeColumn,
+                quantityColumn: vOptions.QuantityColumn,
+                unitPriceColumn: vOptions.UnitPriceColumn,
+                warehouseColumn: vOptions.WarehouseColumn,
+                locationColumn: vOptions.LocationColumn,
+                discountColumn: vOptions.DiscountColumn);
         }
         catch (Exception ex)
         {
             return VendorFillResult.Error($"อ่านไฟล์ CSV ไม่สำเร็จ: {ex.Message}");
         }
 
-        if (vendorRow is null || string.IsNullOrWhiteSpace(vendorRow.VendorName))
+        if (approvedDocs.Count == 0)
         {
-            return VendorFillResult.Error($"ไม่พบข้อมูลผู้ขายในไฟล์ CSV '{effectivePath}' (ตรวจสอบว่ามีคอลัมน์ '{vOptions.VendorNameColumn}')");
+            return VendorFillResult.Error(
+                $"ไม่พบเอกสารที่มี status = '{vOptions.RequiredStatus}' ในไฟล์ CSV '{effectivePath}' (พบเอกสารทั้งหมด {totalDocCount} รายการ)");
         }
 
-        var targetVendorName = vendorRow.VendorName.Trim();
-        Report(progress, $"ผู้ขายเป้าหมาย: '{targetVendorName}'");
+        int skippedCount = totalDocCount - approvedDocs.Count;
+        Report(progress, $"พบเอกสารที่ต้องดำเนินการ {approvedDocs.Count} เอกสาร (ข้าม {skippedCount} รายการที่สถานะไม่ใช่ '{vOptions.RequiredStatus}')");
 
         Report(progress, "กำลังค้นหา Prosoft process...");
         using var process = FindExistingProcess();
@@ -1916,125 +1936,163 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         Report(progress, $"พบหน้าต่างซื้อเชื่อ HWND=0x{childHwnd.ToInt64():X} Rect=({childRect.Left},{childRect.Top},{childRect.Right},{childRect.Bottom})");
 
-        // Activate child window
-        Win32Native.SetForegroundWindow(mainWindowHandle);
-        if (childHwnd != IntPtr.Zero && childHwnd != mainWindowHandle)
+        var processedDocs = new List<string>();
+
+        for (int docIdx = 0; docIdx < approvedDocs.Count; docIdx++)
         {
-            Win32Native.SetForegroundWindow(childHwnd);
-        }
-        await Win32Native.ClickScreenPointAsync(childRect.Left + 80, childRect.Top + 15, cancellationToken);
-        await Task.Delay(200, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
-        // Step 3: Open Find dialog
-        IntPtr findDialogHwnd = FindVendorSearchDialogHwnd(process);
-        if (findDialogHwnd == IntPtr.Zero)
-        {
-            Report(progress, "กำลังเปิดหน้าต่างค้นหารหัสผู้ขาย (F2)...");
-            findDialogHwnd = await OpenVendorSearchDialogAsync(childHwnd, childRect, purchaseElem, process, cancellationToken);
-        }
+            var currentDoc = approvedDocs[docIdx];
+            var docIdentifier = !string.IsNullOrWhiteSpace(currentDoc.DocumentNumber)
+                ? currentDoc.DocumentNumber
+                : (!string.IsNullOrWhiteSpace(currentDoc.TaxInvoiceNumber)
+                    ? currentDoc.TaxInvoiceNumber
+                    : $"ลำดับที่ {docIdx + 1}");
 
-        if (findDialogHwnd == IntPtr.Zero)
-        {
-            return VendorFillResult.Error("ไม่สามารถเปิดหน้าต่าง 'Find รหัสผู้ขาย' ได้ กรุณาตรวจว่าหน้าซื้อเชื่ออยู่ในโหมดเพิ่มข้อมูล (New)");
-        }
+            Report(progress, $"=== [{docIdx + 1}/{approvedDocs.Count}] เริ่มดำเนินการเอกสาร: {docIdentifier} (ผู้ขาย: {currentDoc.VendorName}) ===");
 
-        Report(progress, $"พบหน้าต่างค้นหาผู้ขาย HWND=0x{findDialogHwnd.ToInt64():X} กำลังค้นหา '{targetVendorName}'...");
-        Win32Native.ShowWindow(findDialogHwnd, Win32Native.SW_RESTORE);
-        Win32Native.SetForegroundWindow(findDialogHwnd);
-        await Task.Delay(300, cancellationToken);
-
-        // Step 4: In Find dialog, set Search by = "ชื่อผู้ขาย", enter Text = targetVendorName, press F2, select result
-        var fillResult = await OperateVendorSearchDialogAsync(findDialogHwnd, targetVendorName, process, cancellationToken);
-        if (!fillResult.IsSuccess)
-        {
-            Report(progress, fillResult.Message);
-            return fillResult;
-        }
-
-        Report(progress, $"กรอกผู้ขาย '{targetVendorName}' สำเร็จ...");
-        await Task.Delay(300, cancellationToken);
-
-        // Ensure Credit Purchase window is focused and update bounds
-        if (childHwnd != IntPtr.Zero)
-        {
-            Win32Native.GetWindowRect(childHwnd, out childRect);
+            // Activate child window
             Win32Native.SetForegroundWindow(mainWindowHandle);
-            Win32Native.SetForegroundWindow(childHwnd);
-        }
+            if (childHwnd != IntPtr.Zero && childHwnd != mainWindowHandle)
+            {
+                Win32Native.SetForegroundWindow(childHwnd);
+            }
 
-        // Step 5: Switch to "More" tab
-        Report(progress, "กำลังเลือกแท็บ 'More'...");
-        bool tabSwitched = await SwitchToMoreTabAsync(childHwnd, childRect, purchaseElem, cancellationToken);
-        if (tabSwitched)
-        {
-            Report(progress, "สลับไปแท็บ More เรียบร้อย กำลังตั้งค่ารหัสกลุ่มภาษีเป็น NOVAT...");
-        }
+            if (docIdx > 0)
+            {
+                Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำลังกด 'New' เพื่อเริ่มเอกสารใหม่...");
+                await ClickNewDocumentAsync(childHwnd, childRect, purchaseElem, cancellationToken);
+                await Task.Delay(800, cancellationToken);
 
-        // Step 6: Set "รหัสกลุ่มภาษี" to "NOVAT"
-        Report(progress, "กำลังเลือก รหัสกลุ่มภาษี = 'NOVAT'...");
-        bool taxSet = await SetTaxGroupToNovatAsync(childHwnd, childRect, purchaseElem, process, cancellationToken);
-        if (taxSet)
-        {
-            Report(progress, "กำหนดรหัสกลุ่มภาษีเป็น NOVAT สำเร็จ");
-        }
-        await Task.Delay(300, cancellationToken);
+                if (childHwnd != IntPtr.Zero)
+                {
+                    Win32Native.GetWindowRect(childHwnd, out childRect);
+                    Win32Native.SetForegroundWindow(mainWindowHandle);
+                    Win32Native.SetForegroundWindow(childHwnd);
+                }
+            }
+            else
+            {
+                // For the first document, ensure child window focus
+                await Win32Native.ClickScreenPointAsync(childRect.Left + 80, childRect.Top + 15, cancellationToken);
+                await Task.Delay(200, cancellationToken);
+            }
 
-        // Ensure Credit Purchase window is focused and update bounds before filling doc fields
-        if (childHwnd != IntPtr.Zero)
-        {
-            Win32Native.GetWindowRect(childHwnd, out childRect);
-            Win32Native.SetForegroundWindow(mainWindowHandle);
-            Win32Native.SetForegroundWindow(childHwnd);
-        }
+            // Step 3: Open Find dialog
+            IntPtr findDialogHwnd = FindVendorSearchDialogHwnd(process);
+            if (findDialogHwnd == IntPtr.Zero)
+            {
+                Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำลังเปิดหน้าต่างค้นหารหัสผู้ขาย (F2)...");
+                findDialogHwnd = await OpenVendorSearchDialogAsync(childHwnd, childRect, purchaseElem, process, cancellationToken);
+            }
 
-        // Step 7: Fill Document Fields (เลขที่เอกสาร, เลขที่ใบกำกับ, เลขที่ใบส่งของ)
-        await FillDocumentFieldsAsync(childHwnd, childRect, vendorRow, process, progress, cancellationToken);
-        await Task.Delay(300, cancellationToken);
+            if (findDialogHwnd == IntPtr.Zero)
+            {
+                return VendorFillResult.Error($"[{docIdx + 1}/{approvedDocs.Count}] ไม่สามารถเปิดหน้าต่าง 'Find รหัสผู้ขาย' ได้สำหรับเอกสาร '{docIdentifier}' กรุณาตรวจว่าหน้าซื้อเชื่ออยู่ในโหมดเพิ่มข้อมูล (New)");
+            }
 
-        // Step 8: Switch back to "Detail" tab and fill items
-        Report(progress, "กำลังสลับกลับไปแท็บ Detail...");
-        await SwitchToDetailTabAsync(childHwnd, childRect, purchaseElem, cancellationToken);
-        await Task.Delay(400, cancellationToken);
-
-        if (childHwnd != IntPtr.Zero)
-        {
-            Win32Native.GetWindowRect(childHwnd, out childRect);
-            Win32Native.SetForegroundWindow(mainWindowHandle);
-            Win32Native.SetForegroundWindow(childHwnd);
-        }
-
-        if (vendorRow.Items != null && vendorRow.Items.Count > 0)
-        {
-            await FillDetailItemsAsync(childHwnd, childRect, vendorRow.Items, progress, cancellationToken);
+            var targetVendorName = (currentDoc.VendorName ?? "").Trim();
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] พบหน้าต่างค้นหาผู้ขาย HWND=0x{findDialogHwnd.ToInt64():X} กำลังค้นหา '{targetVendorName}'...");
+            Win32Native.ShowWindow(findDialogHwnd, Win32Native.SW_RESTORE);
+            Win32Native.SetForegroundWindow(findDialogHwnd);
             await Task.Delay(300, cancellationToken);
-        }
-        else
-        {
-            FileLogger.Log("[FillDetailItems] Notice: No detail items found in CSV input file.");
+
+            // Step 4: In Find dialog, set Search by = "ชื่อผู้ขาย", enter Text = targetVendorName, press F2, select result
+            var fillResult = await OperateVendorSearchDialogAsync(findDialogHwnd, targetVendorName, process, cancellationToken);
+            if (!fillResult.IsSuccess)
+            {
+                Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] {fillResult.Message}");
+                return fillResult;
+            }
+
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กรอกผู้ขาย '{targetVendorName}' สำเร็จ...");
+            await Task.Delay(300, cancellationToken);
+
+            // Ensure Credit Purchase window is focused and update bounds
+            if (childHwnd != IntPtr.Zero)
+            {
+                Win32Native.GetWindowRect(childHwnd, out childRect);
+                Win32Native.SetForegroundWindow(mainWindowHandle);
+                Win32Native.SetForegroundWindow(childHwnd);
+            }
+
+            // Step 5: Switch to "More" tab
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำลังเลือกแท็บ 'More'...");
+            bool tabSwitched = await SwitchToMoreTabAsync(childHwnd, childRect, purchaseElem, cancellationToken);
+            if (tabSwitched)
+            {
+                Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] สลับไปแท็บ More เรียบร้อย กำลังตั้งค่ารหัสกลุ่มภาษีเป็น NOVAT...");
+            }
+
+            // Step 6: Set "รหัสกลุ่มภาษี" to "NOVAT"
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำลังเลือก รหัสกลุ่มภาษี = 'NOVAT'...");
+            bool taxSet = await SetTaxGroupToNovatAsync(childHwnd, childRect, purchaseElem, process, cancellationToken);
+            if (taxSet)
+            {
+                Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำหนดรหัสกลุ่มภาษีเป็น NOVAT สำเร็จ");
+            }
+            await Task.Delay(300, cancellationToken);
+
+            // Ensure Credit Purchase window is focused and update bounds before filling doc fields
+            if (childHwnd != IntPtr.Zero)
+            {
+                Win32Native.GetWindowRect(childHwnd, out childRect);
+                Win32Native.SetForegroundWindow(mainWindowHandle);
+                Win32Native.SetForegroundWindow(childHwnd);
+            }
+
+            // Step 7: Fill Document Fields (เลขที่เอกสาร, เลขที่ใบกำกับ, เลขที่ใบส่งของ)
+            await FillDocumentFieldsAsync(childHwnd, childRect, currentDoc, process, progress, cancellationToken);
+            await Task.Delay(300, cancellationToken);
+
+            // Step 8: Switch back to "Detail" tab and fill items
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำลังสลับกลับไปแท็บ Detail...");
+            await SwitchToDetailTabAsync(childHwnd, childRect, purchaseElem, cancellationToken);
+            await Task.Delay(400, cancellationToken);
+
+            if (childHwnd != IntPtr.Zero)
+            {
+                Win32Native.GetWindowRect(childHwnd, out childRect);
+                Win32Native.SetForegroundWindow(mainWindowHandle);
+                Win32Native.SetForegroundWindow(childHwnd);
+            }
+
+            if (currentDoc.Items != null && currentDoc.Items.Count > 0)
+            {
+                await FillDetailItemsAsync(childHwnd, childRect, currentDoc.Items, progress, cancellationToken);
+                await Task.Delay(300, cancellationToken);
+            }
+            else
+            {
+                FileLogger.Log($"[FillDetailItems] Notice: No detail items found for document '{docIdentifier}'.");
+            }
+
+            // Step 9: GL Tab, Post search [>], Checkbox "แก้ไข GL", Department "INTER" for all rows, and Save
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] กำลังสลับไปแท็บ GL และบันทึกเอกสาร...");
+            var glResult = await ProcessGlAndSaveCoreAsync(
+                childHwnd,
+                childRect,
+                purchaseElem,
+                process,
+                _options.Gl.DefaultDepartment,
+                _options.Gl.AutoSaveAfterGl,
+                progress,
+                currentDoc,
+                cancellationToken);
+
+            if (!glResult.IsSuccess)
+            {
+                return VendorFillResult.Error($"[{docIdx + 1}/{approvedDocs.Count}] บันทึกเอกสาร '{docIdentifier}' ไม่สำเร็จ: {glResult.Message}");
+            }
+
+            processedDocs.Add(docIdentifier);
+            Report(progress, $"[{docIdx + 1}/{approvedDocs.Count}] บันทึกเอกสาร '{docIdentifier}' เรียบร้อยแล้ว");
+            await Task.Delay(1000, cancellationToken);
         }
 
-        // Step 9: GL Tab, Post search [>], Checkbox "แก้ไข GL", Department "INTER" for all rows, and Save
-        Report(progress, "กำลังสลับไปแท็บ GL...");
-        var glResult = await ProcessGlAndSaveCoreAsync(
-            childHwnd,
-            childRect,
-            purchaseElem,
-            process,
-            _options.Gl.DefaultDepartment,
-            _options.Gl.AutoSaveAfterGl,
-            progress,
-            vendorRow,
-            cancellationToken);
-
-        var docInfo = string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ? "" : $", เลขที่เอกสาร: {vendorRow.DocumentNumber}";
-        var invInfo = string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber) ? "" : $", เลขที่ใบกำกับ: {vendorRow.TaxInvoiceNumber}";
-        var doInfo = string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber) ? "" : $", เลขที่ใบส่งของ: {vendorRow.DeliveryOrderNumber}";
-        var itemCount = vendorRow.Items?.Count ?? 0;
-        var itemInfo = itemCount > 0 ? $", รายการสินค้า {itemCount} รายการในแท็บ Detail" : "";
-        var glInfo = glResult.IsSuccess ? $", ดำเนินการแท็บ GL (แผนก {_options.Gl.DefaultDepartment}) และบันทึกข้อมูลเรียบร้อย" : "";
-        var finalMsg = $"กรอกข้อมูลผู้ขาย '{targetVendorName}' กำหนดแท็บ More (รหัสกลุ่มภาษี: NOVAT) กรอกเอกสาร{docInfo}{invInfo}{doInfo}{itemInfo}{glInfo} สำเร็จ";
+        var finalMsg = $"บันทึกข้อมูลสำเร็จครบทั้ง {processedDocs.Count} เอกสาร (ข้าม {skippedCount} รายการที่สถานะไม่ใช่ '{vOptions.RequiredStatus}'): {string.Join(", ", processedDocs)}";
         Report(progress, finalMsg);
-        return VendorFillResult.Success(finalMsg, targetVendorName);
+        return VendorFillResult.Success(finalMsg, processedDocs.FirstOrDefault());
     }
 
     private async Task<IntPtr> OpenVendorSearchDialogAsync(
@@ -2172,15 +2230,25 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             return;
         }
 
-        // 3. Fallback: Click at toolbar position (bottom left: childRect.Left + 45, childRect.Bottom - 20)
-        int fallbackX = childRect.Left + 45;
-        int fallbackY = childRect.Bottom - 20;
-        FileLogger.Log($"[EnsureNewMode] Clicking toolbar New button at ({fallbackX}, {fallbackY})...");
-        await Win32Native.ClickScreenPointAsync(fallbackX, fallbackY, cancellationToken);
+        // 3. Fallback: Click at toolbar position (bottom left: childRect.Left + 32, childRect.Bottom - 20)
+        var newPt = CreditPurchaseGlDetector.GetDefaultNewButtonLocation(childRect);
+        FileLogger.Log($"[EnsureNewMode] Clicking toolbar New button at ({newPt.X}, {newPt.Y})...");
+        await Win32Native.ClickScreenPointAsync(newPt.X, newPt.Y, cancellationToken);
 
         // 4. Also send Ctrl+N as backup
         await Task.Delay(200, cancellationToken);
         await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_N, cancellationToken);
+    }
+
+    private async Task ClickNewDocumentAsync(
+        IntPtr childHwnd,
+        Win32Native.RECT childRect,
+        AutomationElement? purchaseElem,
+        CancellationToken cancellationToken)
+    {
+        FileLogger.Log("[ClickNewDocument] Resetting sheet for new document...");
+        await EnsureNewDocumentModeAsync(childHwnd, childRect, purchaseElem, cancellationToken);
+        await Task.Delay(800, cancellationToken);
     }
 
     private async Task<VendorFillResult> OperateVendorSearchDialogAsync(

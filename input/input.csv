@@ -1,2 +1,4 @@
-﻿ชื่อผู้ขาย,เลขที่เอกสาร,เลขที่ใบกำกับ,เลขที่ใบส่งของ,รหัสสินค้า,จำนวน,ราคาต่อหน่วย
-GUANGZHOU NANTIAN,VC0926-00014-5,Shanghai Consolidate 3-2044,26NTSTH-SX040,NTS1-CD-111-9L,20,6205.68
+﻿ชื่อผู้ขาย,เลขที่เอกสาร,เลขที่ใบกำกับ,เลขที่ใบส่งของ,รหัสสินค้า,จำนวน,ราคาต่อหน่วย,status
+GUANGZHOU NANTIAN,VC0926-00014-5,Shanghai Consolidate 3-2044,26NTSTH-SX040,NTS1-CD-111-9L,20,6816.23,Approved
+GUANGZHOU NANTIAN,VC0926-00014-0,Shanghai Consolidate 3-2045,26NTSTH-SX040,NTS1-HLCR2C-W-OHD,5,8600.49,
+GUANGZHOU NANTIAN,VC0926-00015-0,Shanghai Consolidate 3-2046,26NTSTH-SX040,NTS1-HLCR4SS-W-OHD,20,12358.92,Approved

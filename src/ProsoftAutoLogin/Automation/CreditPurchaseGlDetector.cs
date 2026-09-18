@@ -28,6 +28,7 @@ internal static class CreditPurchaseGlDetector
     // Horizontal offsets from childRect.Left
     public const int EditGlCheckboxXOffset = 182;
     public const int PostSearchButtonXOffset = 600;
+    public const int NewButtonXOffset = 32;
     public const int SaveButtonXOffset = 85;
 
     // Column horizontal boundaries and centers (offsets from childRect.Left)
@@ -119,6 +120,14 @@ internal static class CreditPurchaseGlDetector
         if (rowIndex < 1) rowIndex = 1;
         int rowY = greenArrow.Y + GreenArrowToDeptDropdownDy + (rowIndex - 1) * RowPitch;
         return new Point(greenArrow.X + GreenArrowToDeptCellDx, rowY);
+    }
+
+    /// <summary>
+    /// Gets the location of the "New" button on the bottom toolbar.
+    /// </summary>
+    public static Point GetDefaultNewButtonLocation(Win32Native.RECT childRect)
+    {
+        return new Point(childRect.Left + NewButtonXOffset, childRect.Bottom - 20);
     }
 
     /// <summary>

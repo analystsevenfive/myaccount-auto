@@ -1156,6 +1156,83 @@ public class SettingsAndModelsTests
         string actual = CreditPurchaseDocDetector.GenerateNextDeliveryOrderNumber(baseDo, suffix);
         Assert.Equal(expected, actual);
     }
+
+    [Fact]
+    public void CreditPurchaseGlDetector_GetDefaultNewButtonLocation_ReturnsExpectedCoordinates()
+    {
+        var childRect = new Win32Native.RECT { Left = 100, Top = 50, Right = 889, Bottom = 529 };
+        var pt = CreditPurchaseGlDetector.GetDefaultNewButtonLocation(childRect);
+        Assert.Equal(100 + 32, pt.X);
+        Assert.Equal(529 - 20, pt.Y);
+    }
+
+    [Fact]
+    public void VendorCsvReader_ReadApprovedDocuments_FiltersByApprovedStatusAndGroupsItems()
+    {
+        var tempCsv = Path.GetTempFileName();
+        try
+        {
+            var content = "ชื่อผู้ขาย,เลขที่เอกสาร,เลขที่ใบกำกับ,เลขที่ใบส่งของ,รหัสสินค้า,จำนวน,ราคาต่อหน่วย,status\r\n" +
+                          "GUANGZHOU NANTIAN,VC0926-00014-5,Shanghai Consolidate 3-2044,26NTSTH-SX040,NTS1-CD-111-9L,20,6816.23,Approved\r\n" +
+                          "GUANGZHOU NANTIAN,VC0926-00014-0,Shanghai Consolidate 3-2045,26NTSTH-SX040,NTS1-HLCR2C-W-OHD,5,8600.49,\r\n" +
+                          "GUANGZHOU NANTIAN,VC0926-00015-0,Shanghai Consolidate 3-2046,26NTSTH-SX040,NTS1-HLCR4SS-W-OHD,20,12358.92,Approved\r\n" +
+                          "GUANGZHOU NANTIAN,VC0926-00015-0,Shanghai Consolidate 3-2046,26NTSTH-SX040,NTS1-EXTRA-ITEM,10,1000.00,Approved\r\n";
+
+            File.WriteAllText(tempCsv, content, System.Text.Encoding.UTF8);
+
+            var approved = VendorCsvReader.ReadApprovedDocuments(tempCsv, "Approved", "status");
+
+            // Row 2 is skipped because status is empty.
+            // Row 1 is Doc 1. Rows 3 and 4 are Doc 2 (grouped by VC0926-00015-0).
+            Assert.Equal(2, approved.Count);
+
+            // First document
+            Assert.Equal("VC0926-00014-5", approved[0].DocumentNumber);
+            Assert.Equal("Shanghai Consolidate 3-2044", approved[0].TaxInvoiceNumber);
+            Assert.Equal("Approved", approved[0].Status);
+            Assert.NotNull(approved[0].Items);
+            Assert.Single(approved[0].Items!);
+            Assert.Equal("NTS1-CD-111-9L", approved[0].Items![0].ItemCode);
+
+            // Second document (grouped 2 items)
+            Assert.Equal("VC0926-00015-0", approved[1].DocumentNumber);
+            Assert.Equal("Shanghai Consolidate 3-2046", approved[1].TaxInvoiceNumber);
+            Assert.Equal("Approved", approved[1].Status);
+            Assert.NotNull(approved[1].Items);
+            Assert.Equal(2, approved[1].Items!.Count);
+            Assert.Equal("NTS1-HLCR4SS-W-OHD", approved[1].Items![0].ItemCode);
+            Assert.Equal("NTS1-EXTRA-ITEM", approved[1].Items![1].ItemCode);
+        }
+        finally
+        {
+            if (File.Exists(tempCsv)) File.Delete(tempCsv);
+        }
+    }
+
+    [Fact]
+    public void VendorCsvReader_ReadApprovedDocuments_IsCaseInsensitive()
+    {
+        var tempCsv = Path.GetTempFileName();
+        try
+        {
+            var content = "ชื่อผู้ขาย,เลขที่เอกสาร,เลขที่ใบกำกับ,เลขที่ใบส่งของ,รหัสสินค้า,จำนวน,ราคาต่อหน่วย,status\r\n" +
+                          "VENDOR A,DOC-1,INV-1,DO-1,ITEM-1,1,100,approved\r\n" +
+                          "VENDOR B,DOC-2,INV-2,DO-2,ITEM-2,2,200,APPROVED\r\n" +
+                          "VENDOR C,DOC-3,INV-3,DO-3,ITEM-3,3,300,Pending\r\n";
+
+            File.WriteAllText(tempCsv, content, System.Text.Encoding.UTF8);
+
+            var approved = VendorCsvReader.ReadApprovedDocuments(tempCsv, "Approved", "status");
+
+            Assert.Equal(2, approved.Count);
+            Assert.Equal("DOC-1", approved[0].DocumentNumber);
+            Assert.Equal("DOC-2", approved[1].DocumentNumber);
+        }
+        finally
+        {
+            if (File.Exists(tempCsv)) File.Delete(tempCsv);
+        }
+    }
 }
 
 

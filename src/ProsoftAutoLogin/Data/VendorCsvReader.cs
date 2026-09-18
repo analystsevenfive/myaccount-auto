@@ -20,9 +20,11 @@ public sealed record VendorCsvRecord(
     string? DocumentNumber = null,
     string? TaxInvoiceNumber = null,
     string? DeliveryOrderNumber = null,
-    List<DetailItemRecord>? Items = null)
+    List<DetailItemRecord>? Items = null,
+    string? Status = null)
 {
     public string? DeliveryOrderNumber { get; set; } = DeliveryOrderNumber;
+    public string? Status { get; set; } = Status;
 }
 
 public static class VendorCsvReader
@@ -64,7 +66,8 @@ public static class VendorCsvReader
         string unitPriceColumn = "ราคาต่อหน่วย",
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
-        string discountColumn = "ส่วนลด")
+        string discountColumn = "ส่วนลด",
+        string statusColumn = "status")
     {
         var resolved = ResolveCsvPath(filePath);
         if (!File.Exists(resolved))
@@ -105,6 +108,7 @@ public static class VendorCsvReader
         int warehouseIndex = -1;
         int locationIndex = -1;
         int discountIndex = -1;
+        int statusIndex = -1;
 
         for (int i = 0; i < headers.Count; i++)
         {
@@ -200,6 +204,14 @@ public static class VendorCsvReader
             {
                 discountIndex = i;
             }
+
+            if (h.Equals(statusColumn, StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("status", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("Status", StringComparison.OrdinalIgnoreCase) ||
+                h.Contains("สถานะ", StringComparison.OrdinalIgnoreCase))
+            {
+                statusIndex = i;
+            }
         }
 
         // If only 1 column in header and neither matched, default to column 0 as name
@@ -208,13 +220,8 @@ public static class VendorCsvReader
             nameIndex = 0;
         }
 
-        var results = new List<VendorCsvRecord>();
-        var allItems = new List<DetailItemRecord>();
-        string? firstVendorName = null;
-        string? firstVendorCode = null;
-        string? firstDocNo = null;
-        string? firstTaxInvoice = null;
-        string? firstDeliveryOrder = null;
+        var docGroups = new Dictionary<string, VendorCsvRecord>();
+        var docOrder = new List<string>();
 
         for (int row = 1; row < lines.Count; row++)
         {
@@ -230,6 +237,7 @@ public static class VendorCsvReader
             string? warehouse = null;
             string? location = null;
             string? discount = null;
+            string? status = null;
 
             if (nameIndex >= 0 && nameIndex < cols.Count) name = cols[nameIndex].Trim();
             if (codeIndex >= 0 && codeIndex < cols.Count) code = cols[codeIndex].Trim();
@@ -242,19 +250,13 @@ public static class VendorCsvReader
             if (warehouseIndex >= 0 && warehouseIndex < cols.Count) warehouse = cols[warehouseIndex].Trim();
             if (locationIndex >= 0 && locationIndex < cols.Count) location = cols[locationIndex].Trim();
             if (discountIndex >= 0 && discountIndex < cols.Count) discount = cols[discountIndex].Trim();
+            if (statusIndex >= 0 && statusIndex < cols.Count) status = cols[statusIndex].Trim();
 
             // Fallback: if name not set but column 0 exists
             if (string.IsNullOrWhiteSpace(name) && cols.Count > 0 && nameIndex == -1)
             {
                 name = cols[0].Trim();
             }
-
-            // Save first non-empty header fields
-            if (firstVendorName == null && !string.IsNullOrWhiteSpace(name)) firstVendorName = name;
-            if (firstVendorCode == null && !string.IsNullOrWhiteSpace(code)) firstVendorCode = code;
-            if (firstDocNo == null && !string.IsNullOrWhiteSpace(docNo)) firstDocNo = docNo;
-            if (firstTaxInvoice == null && !string.IsNullOrWhiteSpace(taxInvoice)) firstTaxInvoice = taxInvoice;
-            if (firstDeliveryOrder == null && !string.IsNullOrWhiteSpace(deliveryOrder)) firstDeliveryOrder = deliveryOrder;
 
             DetailItemRecord? item = null;
             if (!string.IsNullOrWhiteSpace(itemCode) ||
@@ -263,38 +265,87 @@ public static class VendorCsvReader
                 !string.IsNullOrWhiteSpace(warehouse))
             {
                 item = new DetailItemRecord(itemCode, quantity, unitPrice, warehouse, location, discount);
-                allItems.Add(item);
             }
 
-            var rowItems = item != null ? new List<DetailItemRecord> { item } : new List<DetailItemRecord>();
+            bool hasAnyData = !string.IsNullOrWhiteSpace(name) ||
+                              !string.IsNullOrWhiteSpace(code) ||
+                              !string.IsNullOrWhiteSpace(docNo) ||
+                              !string.IsNullOrWhiteSpace(taxInvoice) ||
+                              !string.IsNullOrWhiteSpace(deliveryOrder) ||
+                              item != null;
+            if (!hasAnyData) continue;
 
-            if (!string.IsNullOrWhiteSpace(name) ||
-                !string.IsNullOrWhiteSpace(code) ||
-                !string.IsNullOrWhiteSpace(docNo) ||
-                !string.IsNullOrWhiteSpace(taxInvoice) ||
-                !string.IsNullOrWhiteSpace(deliveryOrder) ||
-                item != null)
+            // Grouping key: group rows sharing the same Document Number or Tax Invoice into 1 document
+            string docKey = !string.IsNullOrWhiteSpace(docNo)
+                ? $"DOC:{docNo.Trim()}"
+                : !string.IsNullOrWhiteSpace(taxInvoice)
+                    ? $"INV:{taxInvoice.Trim()}"
+                    : !string.IsNullOrWhiteSpace(deliveryOrder)
+                        ? $"DO:{deliveryOrder.Trim()}"
+                        : $"ROW:{row}";
+
+            if (docGroups.TryGetValue(docKey, out var existingDoc))
             {
-                results.Add(new VendorCsvRecord(name, code, docNo, taxInvoice, deliveryOrder, rowItems));
+                if (item != null && existingDoc.Items != null)
+                {
+                    existingDoc.Items.Add(item);
+                }
+                if (string.IsNullOrWhiteSpace(existingDoc.Status) && !string.IsNullOrWhiteSpace(status))
+                {
+                    existingDoc.Status = status;
+                }
+            }
+            else
+            {
+                var docItems = item != null ? new List<DetailItemRecord> { item } : new List<DetailItemRecord>();
+                var newDoc = new VendorCsvRecord(name, code, docNo, taxInvoice, deliveryOrder, docItems, status);
+                docGroups[docKey] = newDoc;
+                docOrder.Add(docKey);
             }
         }
 
-        // Attach all collected items to the first primary record if multiple items exist
-        if (results.Count > 0 && allItems.Count > 0)
+        return docOrder.Select(k => docGroups[k]).ToList();
+    }
+
+    public static List<VendorCsvRecord> ReadApprovedDocuments(
+        string filePath,
+        string requiredStatus = "Approved",
+        string statusColumn = "status",
+        string nameColumn = "ชื่อผู้ขาย",
+        string codeColumn = "รหัสผู้ขาย",
+        string docNoColumn = "เลขที่เอกสาร",
+        string taxInvoiceColumn = "เลขที่ใบกำกับ",
+        string deliveryOrderColumn = "เลขที่ใบส่งของ",
+        string itemCodeColumn = "รหัสสินค้า",
+        string quantityColumn = "จำนวน",
+        string unitPriceColumn = "ราคาต่อหน่วย",
+        string warehouseColumn = "คลัง",
+        string locationColumn = "ที่เก็บ",
+        string discountColumn = "ส่วนลด")
+    {
+        var all = ReadAllVendors(
+            filePath,
+            nameColumn,
+            codeColumn,
+            docNoColumn,
+            taxInvoiceColumn,
+            deliveryOrderColumn,
+            itemCodeColumn,
+            quantityColumn,
+            unitPriceColumn,
+            warehouseColumn,
+            locationColumn,
+            discountColumn,
+            statusColumn);
+
+        if (string.IsNullOrWhiteSpace(requiredStatus))
         {
-            var primary = results[0];
-            results[0] = primary with
-            {
-                VendorName = primary.VendorName ?? firstVendorName,
-                VendorCode = primary.VendorCode ?? firstVendorCode,
-                DocumentNumber = primary.DocumentNumber ?? firstDocNo,
-                TaxInvoiceNumber = primary.TaxInvoiceNumber ?? firstTaxInvoice,
-                DeliveryOrderNumber = primary.DeliveryOrderNumber ?? firstDeliveryOrder,
-                Items = allItems
-            };
+            return all;
         }
 
-        return results;
+        return all.Where(d =>
+            string.Equals(d.Status?.Trim(), requiredStatus.Trim(), StringComparison.OrdinalIgnoreCase)
+        ).ToList();
     }
 
     public static VendorCsvRecord? ReadFirstVendor(
@@ -309,7 +360,8 @@ public static class VendorCsvReader
         string unitPriceColumn = "ราคาต่อหน่วย",
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
-        string discountColumn = "ส่วนลด")
+        string discountColumn = "ส่วนลด",
+        string statusColumn = "status")
     {
         var list = ReadAllVendors(
             filePath,
@@ -323,9 +375,11 @@ public static class VendorCsvReader
             unitPriceColumn,
             warehouseColumn,
             locationColumn,
-            discountColumn);
+            discountColumn,
+            statusColumn);
         return list.FirstOrDefault();
     }
+
 
     private static List<string> ParseCsvLine(string line)
     {

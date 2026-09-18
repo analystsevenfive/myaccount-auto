@@ -34,6 +34,8 @@ public sealed class VendorInputOptions
     public string DiscountColumn { get; set; } = "ส่วนลด";
     public string SearchByOption { get; set; } = "ชื่อผู้ขาย";
     public List<string> FindDialogTitleContains { get; set; } = ["Find", "ผู้ขาย"];
+    public string StatusColumn { get; set; } = "status";
+    public string RequiredStatus { get; set; } = "Approved";
     public string DefaultWarehouse { get; set; } = "BK";
     public string DefaultLocation { get; set; } = "BKW";
     public int TimeoutSeconds { get; set; } = 15;
