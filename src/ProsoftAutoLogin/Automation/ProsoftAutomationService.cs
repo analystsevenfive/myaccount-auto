@@ -411,10 +411,22 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
     {
         foreach (var processName in _options.ProcessNames.Where(x => !string.IsNullOrWhiteSpace(x)))
         {
-            var process = Process.GetProcessesByName(processName).FirstOrDefault();
-            if (process is not null)
+            var processes = Process.GetProcessesByName(processName);
+            foreach (var process in processes)
             {
-                return process;
+                try
+                {
+                    if (process.HasExited || process.Threads.Count == 0)
+                    {
+                        try { process.Kill(); } catch { }
+                        continue;
+                    }
+                    return process;
+                }
+                catch
+                {
+                    continue;
+                }
             }
         }
         return null;
