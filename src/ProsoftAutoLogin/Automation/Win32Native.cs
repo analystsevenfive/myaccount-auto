@@ -355,21 +355,34 @@ internal static class Win32Native
     public static void SetClipboardTextSafe(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        try
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            var thread = new Thread(() =>
+            try
             {
-                try
+                var thread = new Thread(() =>
                 {
-                    System.Windows.Clipboard.SetText(text);
+                    for (int i = 0; i < 5; i++)
+                    {
+                        try
+                        {
+                            System.Windows.Clipboard.SetDataObject(text, true);
+                            return;
+                        }
+                        catch
+                        {
+                            Thread.Sleep(30);
+                        }
+                    }
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                if (thread.Join(1500))
+                {
+                    break;
                 }
-                catch { }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join(1000);
+            }
+            catch { }
         }
-        catch { }
     }
 
     public static string? GetClipboardTextSafe()

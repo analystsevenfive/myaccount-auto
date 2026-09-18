@@ -4125,14 +4125,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         Process process,
         CancellationToken cancellationToken)
     {
-        // Calculate exact coordinates for the department dropdown button [ v ] and the cell center
-        int arrowX = greenArrowPoint.HasValue
-            ? CreditPurchaseGlDetector.GetDepartmentDropdownLocationFromGreenArrow(greenArrowPoint.Value, rowIndex).X
-            : CreditPurchaseGlDetector.GetDepartmentDropdownLocation(childRect, rowIndex).X;
+        string dept = string.IsNullOrWhiteSpace(departmentCode) ? "INTER" : departmentCode.Trim();
 
         int cellY = greenArrowPoint.HasValue
-            ? CreditPurchaseGlDetector.GetDepartmentDropdownLocationFromGreenArrow(greenArrowPoint.Value, rowIndex).Y
-            : CreditPurchaseGlDetector.GetDepartmentDropdownLocation(childRect, rowIndex).Y;
+            ? CreditPurchaseGlDetector.GetDepartmentCellLocationFromGreenArrow(greenArrowPoint.Value, rowIndex).Y
+            : CreditPurchaseGlDetector.GetCellLocation(childRect, rowIndex, GlColumn.Department).Y;
 
         int cellX = greenArrowPoint.HasValue
             ? CreditPurchaseGlDetector.GetDepartmentCellLocationFromGreenArrow(greenArrowPoint.Value, rowIndex).X
@@ -4145,48 +4142,39 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             await Task.Delay(50, cancellationToken);
         }
 
-        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Setting Department to '{departmentCode}' at cell=({cellX}, {cellY}), arrow=({arrowX}, {cellY})...");
+        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Directly pasting Department '{dept}' at cell=({cellX}, {cellY}) without clicking dropdown...");
 
-        // 1. Click firmly inside cell center to focus this row and column
-        await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
-        await Task.Delay(150, cancellationToken);
-
-        // 2. Open dropdown list (both by clicking [ v ] button and sending Alt+Down / F4)
-        await Win32Native.ClickScreenPointAsync(arrowX, cellY, cancellationToken);
-        await Task.Delay(150, cancellationToken);
-
-        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_MENU, Win32Native.VK_DOWN, cancellationToken);
-        await Task.Delay(100, cancellationToken);
-        await Win32Native.SendKeyPressAsync(Win32Native.VK_F4, cancellationToken);
-        await Task.Delay(150, cancellationToken);
-
-        // 3. Select department from dropdown by typing first letter ('I') and pressing Enter
-        byte firstCharKey = (byte)char.ToUpperInvariant(departmentCode[0]);
-        await Win32Native.SendKeyPressAsync(firstCharKey, cancellationToken);
-        await Task.Delay(100, cancellationToken);
-        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
-        await Task.Delay(200, cancellationToken);
-
-        // 4. Direct text typing fallback: in case column accepts direct text entry
+        // 1. Click firmly inside cell text box to activate edit control
         await Win32Native.ClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(100, cancellationToken);
-        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
-        await Task.Delay(50, cancellationToken);
-        foreach (char c in departmentCode)
-        {
-            byte vk = (byte)char.ToUpperInvariant(c);
-            await Win32Native.SendKeyPressAsync(vk, cancellationToken);
-            await Task.Delay(25, cancellationToken);
-        }
+        await Win32Native.DoubleClickScreenPointAsync(cellX, cellY, cancellationToken);
         await Task.Delay(80, cancellationToken);
+
+        // 2. Select-all and clear existing content (e.g. default 'ACC' or partial text)
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+
+        // Sweeping delete/backspace to ensure completely blank
+        for (int i = 0; i < 6; i++)
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_DELETE, cancellationToken);
+        }
+        await Task.Delay(40, cancellationToken);
+
+        // 3. Paste department code directly ("วางคำว่า INTER ได้เลย")
+        Win32Native.SetClipboardTextSafe(dept);
+        await Task.Delay(50, cancellationToken);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
+        await Task.Delay(100, cancellationToken);
+
+        // 4. Commit edit to DataWindow by pressing Enter
         await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
         await Task.Delay(150, cancellationToken);
 
-        // 5. Commit row edit by pressing Enter
-        await Win32Native.SendKeyPressAsync(Win32Native.VK_RETURN, cancellationToken);
-        await Task.Delay(150, cancellationToken);
-
-        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Department '{departmentCode}' set successfully.");
+        FileLogger.Log($"[SetDepartmentOnRow] Row {rowIndex}: Department '{dept}' set successfully.");
     }
 
     private static bool CheckIfGlRowHasData(Win32Native.RECT childRect, Point? greenArrowPoint, int rowIndex)
