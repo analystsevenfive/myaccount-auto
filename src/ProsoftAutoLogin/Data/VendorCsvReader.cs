@@ -23,12 +23,14 @@ public sealed record VendorCsvRecord(
     List<DetailItemRecord>? Items = null,
     string? Status = null,
     string? TaxInvoiceDate = null,
-    string? DeliveryOrderDate = null)
+    string? DeliveryOrderDate = null,
+    string? ResultStatus = null)
 {
     public string? DeliveryOrderNumber { get; set; } = DeliveryOrderNumber;
     public string? Status { get; set; } = Status;
     public string? TaxInvoiceDate { get; set; } = TaxInvoiceDate;
     public string? DeliveryOrderDate { get; set; } = DeliveryOrderDate;
+    public string? ResultStatus { get; set; } = ResultStatus;
 }
 
 public static class VendorCsvReader
@@ -71,7 +73,7 @@ public static class VendorCsvReader
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
         string discountColumn = "ส่วนลด",
-        string statusColumn = "status",
+        string statusColumn = "status approve",
         string taxInvoiceDateColumn = "วันที่ใบกำกับ",
         string deliveryOrderDateColumn = "วันที่ใบส่งของ")
     {
@@ -81,20 +83,7 @@ public static class VendorCsvReader
             throw new FileNotFoundException($"ไม่พบไฟล์ CSV ที่: {resolved}", resolved);
         }
 
-        // Try reading with UTF-8 first using FileShare.ReadWrite (works even if open in Excel)
-        var lines = ReadLinesWithShare(resolved, Encoding.UTF8);
-
-        if (lines.Count < 2)
-        {
-            // Might be encoded in Windows-874 / TIS-620
-            try
-            {
-                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-                var thaiEnc = Encoding.GetEncoding(874);
-                lines = ReadLinesWithShare(resolved, thaiEnc);
-            }
-            catch { }
-        }
+        var (lines, _) = ReadLinesWithDetectedEncoding(resolved);
 
         if (lines.Count == 0)
         {
@@ -116,7 +105,8 @@ public static class VendorCsvReader
         int warehouseIndex = -1;
         int locationIndex = -1;
         int discountIndex = -1;
-        int statusIndex = -1;
+        int statusIndex = headers.FindIndex(h => h.Trim().Equals(statusColumn, StringComparison.Ordinal));
+        int resultStatusIndex = headers.FindIndex(h => h.Trim().Equals("Status", StringComparison.Ordinal));
 
         for (int i = 0; i < headers.Count; i++)
         {
@@ -233,9 +223,10 @@ public static class VendorCsvReader
                 discountIndex = i;
             }
 
-            if (statusIndex == -1 &&
+            if (statusIndex == -1 && i != resultStatusIndex &&
                 (h.Equals(statusColumn, StringComparison.OrdinalIgnoreCase) ||
-                 h.Equals("status", StringComparison.OrdinalIgnoreCase) ||
+                 h.Equals("status approve", StringComparison.OrdinalIgnoreCase) ||
+                 h.Equals("status", StringComparison.Ordinal) ||
                  h.Contains("สถานะ", StringComparison.OrdinalIgnoreCase)))
             {
                 statusIndex = i;
@@ -268,6 +259,7 @@ public static class VendorCsvReader
             string? location = null;
             string? discount = null;
             string? status = null;
+            string? resultStatus = null;
 
             if (nameIndex >= 0 && nameIndex < cols.Count) name = cols[nameIndex].Trim();
             if (codeIndex >= 0 && codeIndex < cols.Count) code = cols[codeIndex].Trim();
@@ -283,6 +275,7 @@ public static class VendorCsvReader
             if (locationIndex >= 0 && locationIndex < cols.Count) location = cols[locationIndex].Trim();
             if (discountIndex >= 0 && discountIndex < cols.Count) discount = cols[discountIndex].Trim();
             if (statusIndex >= 0 && statusIndex < cols.Count) status = cols[statusIndex].Trim();
+            if (resultStatusIndex >= 0 && resultStatusIndex < cols.Count) resultStatus = cols[resultStatusIndex].Trim();
 
             // Fallback: if name not set but column 0 exists
             if (string.IsNullOrWhiteSpace(name) && cols.Count > 0 && nameIndex == -1)
@@ -328,6 +321,10 @@ public static class VendorCsvReader
                 {
                     existingDoc.Status = status;
                 }
+                if (string.IsNullOrWhiteSpace(existingDoc.ResultStatus) && !string.IsNullOrWhiteSpace(resultStatus))
+                {
+                    existingDoc.ResultStatus = resultStatus;
+                }
                 if (string.IsNullOrWhiteSpace(existingDoc.TaxInvoiceDate) && !string.IsNullOrWhiteSpace(taxInvoiceDate))
                 {
                     existingDoc.TaxInvoiceDate = taxInvoiceDate;
@@ -340,7 +337,9 @@ public static class VendorCsvReader
             else
             {
                 var docItems = item != null ? new List<DetailItemRecord> { item } : new List<DetailItemRecord>();
-                var newDoc = new VendorCsvRecord(name, code, docNo, taxInvoice, deliveryOrder, docItems, status, taxInvoiceDate, deliveryOrderDate);
+                var newDoc = new VendorCsvRecord(
+                    name, code, docNo, taxInvoice, deliveryOrder, docItems,
+                    status, taxInvoiceDate, deliveryOrderDate, resultStatus);
                 docGroups[docKey] = newDoc;
                 docOrder.Add(docKey);
             }
@@ -356,7 +355,7 @@ public static class VendorCsvReader
         string resultStatus = "Completed")
     {
         var resolved = ResolveCsvPath(filePath);
-        var lines = ReadLinesWithShare(resolved, Encoding.UTF8);
+        var (lines, sourceEncoding) = ReadLinesWithDetectedEncoding(resolved);
         if (lines.Count == 0) return;
 
         var headers = ParseCsvLine(lines[0]);
@@ -395,7 +394,7 @@ public static class VendorCsvReader
         }
 
         using var stream = new FileStream(resolved, FileMode.Create, FileAccess.Write, FileShare.Read);
-        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        using var writer = new StreamWriter(stream, sourceEncoding);
         foreach (var line in lines)
         {
             writer.WriteLine(line);
@@ -405,7 +404,7 @@ public static class VendorCsvReader
     public static List<VendorCsvRecord> ReadApprovedDocuments(
         string filePath,
         string requiredStatus = "Approved",
-        string statusColumn = "status",
+        string statusColumn = "status approve",
         string nameColumn = "ชื่อผู้ขาย",
         string codeColumn = "รหัสผู้ขาย",
         string docNoColumn = "เลขที่เอกสาร",
@@ -443,7 +442,8 @@ public static class VendorCsvReader
         }
 
         return all.Where(d =>
-            string.Equals(d.Status?.Trim(), requiredStatus.Trim(), StringComparison.OrdinalIgnoreCase)
+            string.Equals(d.Status?.Trim(), requiredStatus.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(d.ResultStatus?.Trim(), "Completed", StringComparison.OrdinalIgnoreCase)
         ).ToList();
     }
 
@@ -501,7 +501,7 @@ public static class VendorCsvReader
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
         string discountColumn = "ส่วนลด",
-        string statusColumn = "status",
+        string statusColumn = "status approve",
         string taxInvoiceDateColumn = "วันที่ใบกำกับ",
         string deliveryOrderDateColumn = "วันที่ใบส่งของ")
     {
@@ -568,5 +568,23 @@ public static class VendorCsvReader
             }
         }
         return result;
+    }
+
+    private static (List<string> Lines, Encoding Encoding) ReadLinesWithDetectedEncoding(string path)
+    {
+        var utf8 = new UTF8Encoding(
+            encoderShouldEmitUTF8Identifier: false,
+            throwOnInvalidBytes: true);
+
+        try
+        {
+            return (ReadLinesWithShare(path, utf8), utf8);
+        }
+        catch (DecoderFallbackException)
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            var windows874 = Encoding.GetEncoding(874);
+            return (ReadLinesWithShare(path, windows874), windows874);
+        }
     }
 }

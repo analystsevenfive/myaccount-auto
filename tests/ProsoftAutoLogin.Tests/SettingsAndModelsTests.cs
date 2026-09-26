@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using FlaUI.Core;
 using FlaUI.UIA3;
@@ -739,6 +740,7 @@ public class SettingsAndModelsTests
         Assert.Equal("ชื่อผู้ขาย", settings.Prosoft.VendorInput.VendorNameColumn);
         Assert.Equal("วันที่ใบกำกับ", settings.Prosoft.VendorInput.TaxInvoiceDateColumn);
         Assert.Equal("วันที่ใบส่งของ", settings.Prosoft.VendorInput.DeliveryOrderDateColumn);
+        Assert.Equal("status approve", settings.Prosoft.VendorInput.StatusColumn);
     }
 
     [Fact]
@@ -824,8 +826,8 @@ public class SettingsAndModelsTests
         Assert.NotEmpty(record.TaxInvoiceNumber);
         Assert.NotNull(record.DeliveryOrderNumber);
         Assert.NotEmpty(record.DeliveryOrderNumber);
-        Assert.Equal("24/9/2026", record.TaxInvoiceDate);
-        Assert.Equal("25/9/2026", record.DeliveryOrderDate);
+        Assert.Equal("15/9/2026", record.TaxInvoiceDate);
+        Assert.Equal("15/9/2026", record.DeliveryOrderDate);
     }
 
     [Fact]
@@ -906,13 +908,46 @@ public class SettingsAndModelsTests
         Assert.NotEmpty(record.TaxInvoiceNumber);
         Assert.NotNull(record.DeliveryOrderNumber);
         Assert.NotEmpty(record.DeliveryOrderNumber);
-        Assert.Equal("24/9/2026", record.TaxInvoiceDate);
-        Assert.Equal("25/9/2026", record.DeliveryOrderDate);
+        Assert.Equal("15/9/2026", record.TaxInvoiceDate);
+        Assert.Equal("15/9/2026", record.DeliveryOrderDate);
 
         Assert.NotNull(record.Items);
         Assert.NotEmpty(record.Items);
         Assert.Equal("NTS1-BBC-GY-WT", record.Items[0].ItemCode);
         Assert.Equal("43", record.Items[0].Quantity);
+    }
+
+    [Fact]
+    public void VendorCsvReader_ReadsThaiColumns_FromWindows874Csv()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var tempCsv = Path.GetTempFileName();
+
+        try
+        {
+            var content =
+                "ชื่อผู้ขาย,เลขที่เอกสาร,เลขที่ใบกำกับ,เลขที่ใบส่งของ,วันที่ใบกำกับ,วันที่ใบส่งของ,รหัสสินค้า,จำนวน,ราคาต่อหน่วย,status\r\n" +
+                "ผู้ขายทดสอบ,DOC-001,INV-001,DO-001,15/9/2026,16/9/2026,ITEM-001,2,125.50,Approved\r\n";
+            File.WriteAllText(tempCsv, content, Encoding.GetEncoding(874));
+
+            var record = VendorCsvReader.ReadFirstVendor(tempCsv);
+
+            Assert.NotNull(record);
+            Assert.Equal("ผู้ขายทดสอบ", record.VendorName);
+            Assert.Equal("DOC-001", record.DocumentNumber);
+            Assert.Equal("INV-001", record.TaxInvoiceNumber);
+            Assert.Equal("DO-001", record.DeliveryOrderNumber);
+            Assert.Equal("15/9/2026", record.TaxInvoiceDate);
+            Assert.Equal("16/9/2026", record.DeliveryOrderDate);
+            Assert.Single(record.Items!);
+            Assert.Equal("ITEM-001", record.Items![0].ItemCode);
+            Assert.Equal("2", record.Items[0].Quantity);
+            Assert.Equal("125.50", record.Items[0].UnitPrice);
+        }
+        finally
+        {
+            File.Delete(tempCsv);
+        }
     }
 
     [Fact]
@@ -1295,6 +1330,54 @@ public class SettingsAndModelsTests
         finally
         {
             if (File.Exists(tempCsv)) File.Delete(tempCsv);
+        }
+    }
+
+    [Fact]
+    public void VendorCsvReader_ReadApprovedDocuments_SkipsCompletedDocuments()
+    {
+        var tempCsv = Path.GetTempFileName();
+        try
+        {
+            var content = "ชื่อผู้ขาย,เลขที่เอกสาร,รหัสสินค้า,status approve,Time use,Status\r\n" +
+                          "VENDOR A,DOC-1,ITEM-1,Approved,00:01:00,Completed\r\n" +
+                          "VENDOR B,DOC-2,ITEM-2,Approved,,\r\n" +
+                          "VENDOR C,DOC-3,ITEM-3,Approved,,completed\r\n" +
+                          "VENDOR D,DOC-4,ITEM-4,Pending,,\r\n";
+            File.WriteAllText(tempCsv, content, Encoding.UTF8);
+
+            var approved = VendorCsvReader.ReadApprovedDocuments(tempCsv);
+
+            Assert.Single(approved);
+            Assert.Equal("DOC-2", approved[0].DocumentNumber);
+            Assert.True(string.IsNullOrWhiteSpace(approved[0].ResultStatus));
+        }
+        finally
+        {
+            File.Delete(tempCsv);
+        }
+    }
+
+    [Fact]
+    public void VendorCsvReader_ReadApprovedDocuments_SkipsGroupedDocumentWhenAnyRowIsCompleted()
+    {
+        var tempCsv = Path.GetTempFileName();
+        try
+        {
+            var content = "ชื่อผู้ขาย,เลขที่เอกสาร,รหัสสินค้า,status approve,Time use,Status\r\n" +
+                          "VENDOR A,DOC-1,ITEM-1,Approved,,\r\n" +
+                          "VENDOR A,DOC-1,ITEM-2,Approved,00:01:00,Completed\r\n" +
+                          "VENDOR B,DOC-2,ITEM-3,Approved,,\r\n";
+            File.WriteAllText(tempCsv, content, Encoding.UTF8);
+
+            var approved = VendorCsvReader.ReadApprovedDocuments(tempCsv);
+
+            Assert.Single(approved);
+            Assert.Equal("DOC-2", approved[0].DocumentNumber);
+        }
+        finally
+        {
+            File.Delete(tempCsv);
         }
     }
 }

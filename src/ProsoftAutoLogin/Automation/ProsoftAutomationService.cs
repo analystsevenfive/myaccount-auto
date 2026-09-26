@@ -1860,7 +1860,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         var vOptions = _options.VendorInput;
         var effectivePath = string.IsNullOrWhiteSpace(csvPath) ? vOptions.CsvPath : csvPath;
 
-        Report(progress, $"กำลังอ่านข้อมูลผู้ขายและเอกสารจาก '{effectivePath}' (เฉพาะ status = '{vOptions.RequiredStatus}')...");
+        Report(progress, $"กำลังอ่านข้อมูลผู้ขายและเอกสารจาก '{effectivePath}' (เฉพาะ {vOptions.StatusColumn} = '{vOptions.RequiredStatus}')...");
         List<VendorCsvRecord> approvedDocs;
         int totalDocCount = 0;
         try
@@ -1909,11 +1909,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         if (approvedDocs.Count == 0)
         {
             return VendorFillResult.Error(
-                $"ไม่พบเอกสารที่มี status = '{vOptions.RequiredStatus}' ในไฟล์ CSV '{effectivePath}' (พบเอกสารทั้งหมด {totalDocCount} รายการ)");
+                $"ไม่พบเอกสารที่มี {vOptions.StatusColumn} = '{vOptions.RequiredStatus}' และยังไม่ Completed ในไฟล์ CSV '{effectivePath}' (พบเอกสารทั้งหมด {totalDocCount} รายการ)");
         }
 
         int skippedCount = totalDocCount - approvedDocs.Count;
-        Report(progress, $"พบเอกสารที่ต้องดำเนินการ {approvedDocs.Count} เอกสาร (ข้าม {skippedCount} รายการที่สถานะไม่ใช่ '{vOptions.RequiredStatus}')");
+        Report(progress, $"พบเอกสารที่ต้องดำเนินการ {approvedDocs.Count} เอกสาร (ข้าม {skippedCount} รายการที่ไม่ใช่ '{vOptions.RequiredStatus}' หรือ Completed แล้ว)");
 
         Report(progress, "กำลังค้นหา Prosoft process...");
         using var process = FindExistingProcess();
@@ -2123,7 +2123,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             await Task.Delay(1000, cancellationToken);
         }
 
-        var finalMsg = $"บันทึกข้อมูลสำเร็จครบทั้ง {processedDocs.Count} เอกสาร (ข้าม {skippedCount} รายการที่สถานะไม่ใช่ '{vOptions.RequiredStatus}'): {string.Join(", ", processedDocs)}";
+        var finalMsg = $"บันทึกข้อมูลสำเร็จครบทั้ง {processedDocs.Count} เอกสาร (ข้าม {skippedCount} รายการที่ไม่ใช่ '{vOptions.RequiredStatus}' หรือ Completed แล้ว): {string.Join(", ", processedDocs)}";
         Report(progress, finalMsg);
         return VendorFillResult.Success(finalMsg, processedDocs.FirstOrDefault());
     }
