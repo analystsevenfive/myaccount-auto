@@ -21,10 +21,14 @@ public sealed record VendorCsvRecord(
     string? TaxInvoiceNumber = null,
     string? DeliveryOrderNumber = null,
     List<DetailItemRecord>? Items = null,
-    string? Status = null)
+    string? Status = null,
+    string? TaxInvoiceDate = null,
+    string? DeliveryOrderDate = null)
 {
     public string? DeliveryOrderNumber { get; set; } = DeliveryOrderNumber;
     public string? Status { get; set; } = Status;
+    public string? TaxInvoiceDate { get; set; } = TaxInvoiceDate;
+    public string? DeliveryOrderDate { get; set; } = DeliveryOrderDate;
 }
 
 public static class VendorCsvReader
@@ -67,7 +71,9 @@ public static class VendorCsvReader
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
         string discountColumn = "ส่วนลด",
-        string statusColumn = "status")
+        string statusColumn = "status",
+        string taxInvoiceDateColumn = "วันที่ใบกำกับ",
+        string deliveryOrderDateColumn = "วันที่ใบส่งของ")
     {
         var resolved = ResolveCsvPath(filePath);
         if (!File.Exists(resolved))
@@ -102,6 +108,8 @@ public static class VendorCsvReader
         int docNoIndex = -1;
         int taxInvoiceIndex = -1;
         int deliveryOrderIndex = -1;
+        int taxInvoiceDateIndex = -1;
+        int deliveryOrderDateIndex = -1;
         int itemCodeIndex = -1;
         int quantityIndex = -1;
         int unitPriceIndex = -1;
@@ -151,6 +159,26 @@ public static class VendorCsvReader
                 h.Equals("DONo", StringComparison.OrdinalIgnoreCase))
             {
                 deliveryOrderIndex = i;
+            }
+
+            if (h.Equals(taxInvoiceDateColumn, StringComparison.OrdinalIgnoreCase) ||
+                h.Contains("วันที่ใบกำกับ", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("TaxInvoiceDate", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("InvoiceDate", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("วันที่กำกับ", StringComparison.OrdinalIgnoreCase))
+            {
+                taxInvoiceDateIndex = i;
+            }
+
+            if (h.Equals(deliveryOrderDateColumn, StringComparison.OrdinalIgnoreCase) ||
+                h.Contains("วันที่ใบส่งของ", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DeliveryOrderDate", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DONoDate", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DODate", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("DeliveryDate", StringComparison.OrdinalIgnoreCase) ||
+                h.Equals("วันที่ส่งของ", StringComparison.OrdinalIgnoreCase))
+            {
+                deliveryOrderDateIndex = i;
             }
 
             if (h.Equals(itemCodeColumn, StringComparison.OrdinalIgnoreCase) ||
@@ -205,10 +233,10 @@ public static class VendorCsvReader
                 discountIndex = i;
             }
 
-            if (h.Equals(statusColumn, StringComparison.OrdinalIgnoreCase) ||
-                h.Equals("status", StringComparison.OrdinalIgnoreCase) ||
-                h.Equals("Status", StringComparison.OrdinalIgnoreCase) ||
-                h.Contains("สถานะ", StringComparison.OrdinalIgnoreCase))
+            if (statusIndex == -1 &&
+                (h.Equals(statusColumn, StringComparison.OrdinalIgnoreCase) ||
+                 h.Equals("status", StringComparison.OrdinalIgnoreCase) ||
+                 h.Contains("สถานะ", StringComparison.OrdinalIgnoreCase)))
             {
                 statusIndex = i;
             }
@@ -231,6 +259,8 @@ public static class VendorCsvReader
             string? docNo = null;
             string? taxInvoice = null;
             string? deliveryOrder = null;
+            string? taxInvoiceDate = null;
+            string? deliveryOrderDate = null;
             string? itemCode = null;
             string? quantity = null;
             string? unitPrice = null;
@@ -244,6 +274,8 @@ public static class VendorCsvReader
             if (docNoIndex >= 0 && docNoIndex < cols.Count) docNo = cols[docNoIndex].Trim();
             if (taxInvoiceIndex >= 0 && taxInvoiceIndex < cols.Count) taxInvoice = cols[taxInvoiceIndex].Trim();
             if (deliveryOrderIndex >= 0 && deliveryOrderIndex < cols.Count) deliveryOrder = cols[deliveryOrderIndex].Trim();
+            if (taxInvoiceDateIndex >= 0 && taxInvoiceDateIndex < cols.Count) taxInvoiceDate = cols[taxInvoiceDateIndex].Trim();
+            if (deliveryOrderDateIndex >= 0 && deliveryOrderDateIndex < cols.Count) deliveryOrderDate = cols[deliveryOrderDateIndex].Trim();
             if (itemCodeIndex >= 0 && itemCodeIndex < cols.Count) itemCode = cols[itemCodeIndex].Trim();
             if (quantityIndex >= 0 && quantityIndex < cols.Count) quantity = cols[quantityIndex].Trim();
             if (unitPriceIndex >= 0 && unitPriceIndex < cols.Count) unitPrice = cols[unitPriceIndex].Trim();
@@ -272,6 +304,8 @@ public static class VendorCsvReader
                               !string.IsNullOrWhiteSpace(docNo) ||
                               !string.IsNullOrWhiteSpace(taxInvoice) ||
                               !string.IsNullOrWhiteSpace(deliveryOrder) ||
+                              !string.IsNullOrWhiteSpace(taxInvoiceDate) ||
+                              !string.IsNullOrWhiteSpace(deliveryOrderDate) ||
                               item != null;
             if (!hasAnyData) continue;
 
@@ -294,17 +328,78 @@ public static class VendorCsvReader
                 {
                     existingDoc.Status = status;
                 }
+                if (string.IsNullOrWhiteSpace(existingDoc.TaxInvoiceDate) && !string.IsNullOrWhiteSpace(taxInvoiceDate))
+                {
+                    existingDoc.TaxInvoiceDate = taxInvoiceDate;
+                }
+                if (string.IsNullOrWhiteSpace(existingDoc.DeliveryOrderDate) && !string.IsNullOrWhiteSpace(deliveryOrderDate))
+                {
+                    existingDoc.DeliveryOrderDate = deliveryOrderDate;
+                }
             }
             else
             {
                 var docItems = item != null ? new List<DetailItemRecord> { item } : new List<DetailItemRecord>();
-                var newDoc = new VendorCsvRecord(name, code, docNo, taxInvoice, deliveryOrder, docItems, status);
+                var newDoc = new VendorCsvRecord(name, code, docNo, taxInvoice, deliveryOrder, docItems, status, taxInvoiceDate, deliveryOrderDate);
                 docGroups[docKey] = newDoc;
                 docOrder.Add(docKey);
             }
         }
 
         return docOrder.Select(k => docGroups[k]).ToList();
+    }
+
+    public static void UpdateDocumentResult(
+        string filePath,
+        VendorCsvRecord document,
+        TimeSpan elapsed,
+        string resultStatus = "Completed")
+    {
+        var resolved = ResolveCsvPath(filePath);
+        var lines = ReadLinesWithShare(resolved, Encoding.UTF8);
+        if (lines.Count == 0) return;
+
+        var headers = ParseCsvLine(lines[0]);
+        int docNoIndex = FindHeaderIndex(headers, "เลขที่เอกสาร", "DocNo", "DocumentNo");
+        int taxInvoiceIndex = FindHeaderIndex(headers, "เลขที่ใบกำกับ", "TaxInvoiceNo", "InvoiceNo");
+        int deliveryOrderIndex = FindHeaderIndex(headers, "เลขที่ใบส่งของ", "DeliveryOrderNo", "DONo");
+        int timeUseIndex = FindHeaderIndex(headers, "Time use");
+        int resultStatusIndex = headers.FindIndex(h => h.Trim().Equals("Status", StringComparison.Ordinal));
+
+        if (timeUseIndex < 0 || resultStatusIndex < 0)
+        {
+            throw new InvalidDataException("ไม่พบคอลัมน์ 'Time use' หรือ 'Status' ในไฟล์ CSV");
+        }
+
+        string documentKey = BuildDocumentKey(
+            document.DocumentNumber,
+            document.TaxInvoiceNumber,
+            document.DeliveryOrderNumber);
+        string elapsedText = elapsed.ToString(@"hh\:mm\:ss");
+
+        for (int row = 1; row < lines.Count; row++)
+        {
+            var columns = ParseCsvLine(lines[row]);
+            string rowKey = BuildDocumentKey(
+                GetColumn(columns, docNoIndex),
+                GetColumn(columns, taxInvoiceIndex),
+                GetColumn(columns, deliveryOrderIndex));
+
+            if (rowKey == documentKey)
+            {
+                EnsureColumnCount(columns, headers.Count);
+                columns[timeUseIndex] = elapsedText;
+                columns[resultStatusIndex] = resultStatus;
+                lines[row] = string.Join(",", columns.Select(EscapeCsvValue));
+            }
+        }
+
+        using var stream = new FileStream(resolved, FileMode.Create, FileAccess.Write, FileShare.Read);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        foreach (var line in lines)
+        {
+            writer.WriteLine(line);
+        }
     }
 
     public static List<VendorCsvRecord> ReadApprovedDocuments(
@@ -321,7 +416,9 @@ public static class VendorCsvReader
         string unitPriceColumn = "ราคาต่อหน่วย",
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
-        string discountColumn = "ส่วนลด")
+        string discountColumn = "ส่วนลด",
+        string taxInvoiceDateColumn = "วันที่ใบกำกับ",
+        string deliveryOrderDateColumn = "วันที่ใบส่งของ")
     {
         var all = ReadAllVendors(
             filePath,
@@ -336,7 +433,9 @@ public static class VendorCsvReader
             warehouseColumn,
             locationColumn,
             discountColumn,
-            statusColumn);
+            statusColumn,
+            taxInvoiceDateColumn,
+            deliveryOrderDateColumn);
 
         if (string.IsNullOrWhiteSpace(requiredStatus))
         {
@@ -346,6 +445,47 @@ public static class VendorCsvReader
         return all.Where(d =>
             string.Equals(d.Status?.Trim(), requiredStatus.Trim(), StringComparison.OrdinalIgnoreCase)
         ).ToList();
+    }
+
+    private static int FindHeaderIndex(List<string> headers, params string[] names)
+    {
+        for (int i = 0; i < headers.Count; i++)
+        {
+            if (names.Any(name => headers[i].Trim().Equals(name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string BuildDocumentKey(string? documentNumber, string? taxInvoiceNumber, string? deliveryOrderNumber)
+    {
+        if (!string.IsNullOrWhiteSpace(documentNumber)) return $"DOC:{documentNumber.Trim()}";
+        if (!string.IsNullOrWhiteSpace(taxInvoiceNumber)) return $"INV:{taxInvoiceNumber.Trim()}";
+        if (!string.IsNullOrWhiteSpace(deliveryOrderNumber)) return $"DO:{deliveryOrderNumber.Trim()}";
+        return string.Empty;
+    }
+
+    private static string? GetColumn(List<string> columns, int index)
+    {
+        return index >= 0 && index < columns.Count ? columns[index].Trim() : null;
+    }
+
+    private static void EnsureColumnCount(List<string> columns, int count)
+    {
+        while (columns.Count < count)
+        {
+            columns.Add(string.Empty);
+        }
+    }
+
+    private static string EscapeCsvValue(string value)
+    {
+        return value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r')
+            ? $"\"{value.Replace("\"", "\"\"")}\""
+            : value;
     }
 
     public static VendorCsvRecord? ReadFirstVendor(
@@ -361,7 +501,9 @@ public static class VendorCsvReader
         string warehouseColumn = "คลัง",
         string locationColumn = "ที่เก็บ",
         string discountColumn = "ส่วนลด",
-        string statusColumn = "status")
+        string statusColumn = "status",
+        string taxInvoiceDateColumn = "วันที่ใบกำกับ",
+        string deliveryOrderDateColumn = "วันที่ใบส่งของ")
     {
         var list = ReadAllVendors(
             filePath,
@@ -376,7 +518,9 @@ public static class VendorCsvReader
             warehouseColumn,
             locationColumn,
             discountColumn,
-            statusColumn);
+            statusColumn,
+            taxInvoiceDateColumn,
+            deliveryOrderDateColumn);
         return list.FirstOrDefault();
     }
 

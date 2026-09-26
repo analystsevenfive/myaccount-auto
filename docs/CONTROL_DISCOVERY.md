@@ -94,5 +94,12 @@ UI Tree Exporter ไม่อ่าน `Value` ของ control จึงไม
 - **การล้างข้อความในกล่องข้อความ (Bulletproof Field Clearing)**:
     - ใน PowerBuilder DataWindow คำสั่ง `Ctrl+A` จะไม่ทำงานหากคีย์บอร์ดอยู่ในโหมดภาษาไทย และการ Double-click จะไฮไลต์ได้ไม่ครบหากข้อความมีเครื่องหมายขีด (`-`)
     - ระบบจึงใช้เทคนิคสลับ Layout เป็น English (US) อัตโนมัติ พร้อมส่งคีย์ `Home` ➔ `Shift+End` ➔ `Delete`, `End` ➔ `Shift+Home` ➔ `Backspace` และ Backspace/Delete ซ้ำหลายรอบเพื่อให้แน่ใจว่ากล่องว่างเปล่า 100% ก่อนวางข้อความใหม่จาก CSV ป้องกันปัญหาข้อความซ้อนทับกัน
+- **ฟิลด์วันที่ส่วนหัว (Header Date Fields: วันที่ใบกำกับ และ วันที่ใบส่งของ)**:
+    - **วันที่ใบกำกับ**: พิกัด `childRect.Left + 700`, `childRect.Top + 91` (วางอยู่ถัดจากช่อง `เลขที่ใบกำกับ` ไปทางขวา 180px)
+    - **วันที่ใบส่งของ**: พิกัด `childRect.Left + 700`, `childRect.Top + 110` (วางอยู่ถัดจากช่อง `เลขที่ใบส่งของ` ไปทางขวา 180px)
+    - **Control Type & EditMask**: เป็น PowerBuilder EditMask มี Mask `[   /  /   ]` พร้อมปุ่ม Calendar icon ด้านขวา
+    - **Date Format**: ใช้รูปแบบ `dd/MM/yyyy` (เช่น `24/09/2026`) เป็นปี ค.ศ.
+    - **Data Normalization**: ฟังก์ชัน `CreditPurchaseDocDetector.NormalizeProsoftDate` รองรับการอ่านค่าจาก Excel/CSV ทั้งรูปแบบ `24/9/2026`, `24/09/2026`, `2026-09-24` รวมถึงกรณีเป็นปี พ.ศ. (เช่น 2569 จะแปลงเป็น 2026) และเติมเลขศูนย์นำหน้า (Leading zero) ให้อัตโนมัติ เพื่อป้องกันไม่ให้โครงสร้าง EditMask เลื่อน
+    - **Input Mechanism**: ทำการสลับ Keyboard Layout เป็น English (US), คลิกและ Double-Click ที่ช่องวันที่, ล้างค่าเดิม, ส่งเคอร์เซอร์ไปตำแหน่งแรกสุด (`Home`), วางข้อความผ่าน Clipboard (`Ctrl+V`) และส่งคีย์ `Tab` เพื่อ commit วันที่เข้าสู่ DataWindow buffer อย่างสมบูรณ์
 
 

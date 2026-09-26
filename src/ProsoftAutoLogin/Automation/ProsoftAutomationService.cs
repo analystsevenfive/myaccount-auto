@@ -301,56 +301,62 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             okButtonHwnd = Win32Native.FindOkButtonHwnd(loginWindowHandle);
         }
 
-        // Execute click via all valid strategies
+        var submitTriggered = false;
+
         if (loginButton is not null)
         {
             Report(progress, $"พบปุ่ม OK '{loginButton.Name}' ({loginButton.ClassName}) กำลังกด (UIA)...");
             InvokeOrClick(loginButton);
+            submitTriggered = true;
         }
-
-        if (okButtonHwnd != IntPtr.Zero)
+        else if (okButtonHwnd != IntPtr.Zero)
         {
             Report(progress, $"กำลังกดปุ่ม OK (Win32 HWND 0x{okButtonHwnd.ToInt64():X})...");
             Win32Native.ClickButtonHwnd(okButtonHwnd, loginWindowHandle);
+            submitTriggered = true;
         }
 
-        // Calculate physical screen click coordinates as reliable fallback
-        int clickX, clickY;
-        if (loginButton is not null && !loginButton.BoundingRectangle.IsEmpty)
+        if (!submitTriggered)
         {
-            clickX = (int)(loginButton.BoundingRectangle.Left + loginButton.BoundingRectangle.Width / 2);
-            clickY = (int)(loginButton.BoundingRectangle.Top + loginButton.BoundingRectangle.Height / 2);
-        }
-        else if (okButtonHwnd != IntPtr.Zero && Win32Native.GetWindowRect(okButtonHwnd, out var okRect))
-        {
-            clickX = (okRect.Left + okRect.Right) / 2;
-            clickY = (okRect.Top + okRect.Bottom) / 2;
-        }
-        else
-        {
-            // OK button is aligned with password field left (1033) + half of button width (~37)
-            // Vertically it is between password bottom (481) and profile top (552) -> ~531
-            clickX = (int)(pwRect.Left + 37);
-            clickY = (int)((pwRect.Bottom + profileTop) / 2);
+            // Calculate physical screen click coordinates as reliable fallback
+            int clickX, clickY;
+            if (loginButton is not null && !loginButton.BoundingRectangle.IsEmpty)
+            {
+                clickX = (int)(loginButton.BoundingRectangle.Left + loginButton.BoundingRectangle.Width / 2);
+                clickY = (int)(loginButton.BoundingRectangle.Top + loginButton.BoundingRectangle.Height / 2);
+            }
+            else if (okButtonHwnd != IntPtr.Zero && Win32Native.GetWindowRect(okButtonHwnd, out var okRect))
+            {
+                clickX = (okRect.Left + okRect.Right) / 2;
+                clickY = (okRect.Top + okRect.Bottom) / 2;
+            }
+            else
+            {
+                // OK button is aligned with password field left (1033) + half of button width (~37)
+                // Vertically it is between password bottom (481) and profile top (552) -> ~531
+                clickX = (int)(pwRect.Left + 37);
+                clickY = (int)((pwRect.Bottom + profileTop) / 2);
+            }
+
+            Report(progress, $"ส่งคำสั่งคลิกปุ่ม OK ที่ตำแหน่ง ({clickX}, {clickY})...");
+            try
+            {
+                await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[MouseClick ERROR] {ex.Message}");
+            }
         }
 
-        Report(progress, $"ส่งคำสั่งคลิกปุ่ม OK ที่ตำแหน่ง ({clickX}, {clickY})...");
-        try
+        if (!submitTriggered)
         {
-            await Win32Native.ClickScreenPointAsync(clickX, clickY, cancellationToken);
-            Mouse.LeftClick(new System.Drawing.Point(clickX, clickY));
+            try
+            {
+                Keyboard.Type(VirtualKeyShort.ENTER);
+            }
+            catch { }
         }
-        catch (Exception ex)
-        {
-            FileLogger.Log($"[MouseClick ERROR] {ex.Message}");
-        }
-
-        // Fallback: send Enter key to trigger default OK button
-        try
-        {
-            Keyboard.Type(VirtualKeyShort.ENTER);
-        }
-        catch { }
 
         Report(progress, "ส่งคำสั่ง Login แล้ว กำลังรอผลลัพธ์...");
         return await WaitForResultAsync(
@@ -1872,7 +1878,9 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 warehouseColumn: vOptions.WarehouseColumn,
                 locationColumn: vOptions.LocationColumn,
                 discountColumn: vOptions.DiscountColumn,
-                statusColumn: vOptions.StatusColumn);
+                statusColumn: vOptions.StatusColumn,
+                taxInvoiceDateColumn: vOptions.TaxInvoiceDateColumn,
+                deliveryOrderDateColumn: vOptions.DeliveryOrderDateColumn);
 
             totalDocCount = allDocs.Count;
             approvedDocs = VendorCsvReader.ReadApprovedDocuments(
@@ -1889,7 +1897,9 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 unitPriceColumn: vOptions.UnitPriceColumn,
                 warehouseColumn: vOptions.WarehouseColumn,
                 locationColumn: vOptions.LocationColumn,
-                discountColumn: vOptions.DiscountColumn);
+                discountColumn: vOptions.DiscountColumn,
+                taxInvoiceDateColumn: vOptions.TaxInvoiceDateColumn,
+                deliveryOrderDateColumn: vOptions.DeliveryOrderDateColumn);
         }
         catch (Exception ex)
         {
@@ -1960,6 +1970,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 : (!string.IsNullOrWhiteSpace(currentDoc.TaxInvoiceNumber)
                     ? currentDoc.TaxInvoiceNumber
                     : $"ลำดับที่ {docIdx + 1}");
+            var documentTimer = Stopwatch.StartNew();
 
             Report(progress, $"=== [{docIdx + 1}/{approvedDocs.Count}] เริ่มดำเนินการเอกสาร: {docIdentifier} (ผู้ขาย: {currentDoc.VendorName}) ===");
 
@@ -2095,6 +2106,16 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             if (!glResult.IsSuccess)
             {
                 return VendorFillResult.Error($"[{docIdx + 1}/{approvedDocs.Count}] บันทึกเอกสาร '{docIdentifier}' ไม่สำเร็จ: {glResult.Message}");
+            }
+
+            documentTimer.Stop();
+            try
+            {
+                VendorCsvReader.UpdateDocumentResult(effectivePath, currentDoc, documentTimer.Elapsed);
+            }
+            catch (Exception ex)
+            {
+                return VendorFillResult.Error($"[{docIdx + 1}/{approvedDocs.Count}] บันทึกเอกสาร '{docIdentifier}' สำเร็จ แต่เขียนผลลัพธ์ลง CSV ไม่สำเร็จ: {ex.Message}");
             }
 
             processedDocs.Add(docIdentifier);
@@ -2508,16 +2529,18 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
     {
         bool hasAnyDocField = !string.IsNullOrWhiteSpace(vendorRow.DocumentNumber) ||
                               !string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceNumber) ||
-                              !string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber);
+                              !string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber) ||
+                              !string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceDate) ||
+                              !string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderDate);
 
         if (!hasAnyDocField)
         {
-            FileLogger.Log("[FillDocFields] No document number fields provided in CSV record.");
+            FileLogger.Log("[FillDocFields] No document number or date fields provided in CSV record.");
             return true;
         }
 
-        Report(progress, "กำลังกรอกข้อมูลเอกสาร (เลขที่เอกสาร, เลขที่ใบกำกับ, เลขที่ใบส่งของ)...");
-        FileLogger.Log($"[FillDocFields] Filling fields: DocNo='{vendorRow.DocumentNumber}', TaxInvoice='{vendorRow.TaxInvoiceNumber}', DO='{vendorRow.DeliveryOrderNumber}'");
+        Report(progress, "กำลังกรอกข้อมูลเอกสาร (เลขที่เอกสาร, เลขที่ใบกำกับ, วันที่ใบกำกับ, เลขที่ใบส่งของ, วันที่ใบส่งของ)...");
+        FileLogger.Log($"[FillDocFields] Filling fields: DocNo='{vendorRow.DocumentNumber}', TaxInvoice='{vendorRow.TaxInvoiceNumber}', TaxDate='{vendorRow.TaxInvoiceDate}', DO='{vendorRow.DeliveryOrderNumber}', DODate='{vendorRow.DeliveryOrderDate}'");
 
         // Determine coordinates (visual detector or verified proportional layout)
         var loc = CreditPurchaseDocDetector.GetDefaultDocFieldLocations(childRect);
@@ -2527,13 +2550,17 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         int taxY = loc.TaxInvoice.Y;
         int doX = loc.DeliveryOrder.X;
         int doY = loc.DeliveryOrder.Y;
+        int taxDateX = loc.TaxInvoiceDate.X;
+        int taxDateY = loc.TaxInvoiceDate.Y;
+        int doDateX = loc.DeliveryOrderDate.X;
+        int doDateY = loc.DeliveryOrderDate.Y;
 
         // Visual detection scan if possible
         try
         {
             int scanX = childRect.Left + 420;
             int scanY = childRect.Top + 50;
-            int scanW = Math.Min(220, childRect.Right - scanX);
+            int scanW = Math.Min(340, childRect.Right - scanX);
             int scanH = Math.Min(90, childRect.Bottom - scanY);
             if (scanW > 120 && scanH > 60)
             {
@@ -2551,7 +2578,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                     taxY = detected.TaxInvoice.Y;
                     doX = detected.DeliveryOrder.X;
                     doY = detected.DeliveryOrder.Y;
-                    FileLogger.Log($"[FillDocFields] Visually detected doc fields: Doc=({docX},{docY}), TaxInv=({taxX},{taxY}), DO=({doX},{doY})");
+                    taxDateX = detected.TaxInvoiceDate.X;
+                    taxDateY = detected.TaxInvoiceDate.Y;
+                    doDateX = detected.DeliveryOrderDate.X;
+                    doDateY = detected.DeliveryOrderDate.Y;
+                    FileLogger.Log($"[FillDocFields] Visually detected doc fields: Doc=({docX},{docY}), TaxInv=({taxX},{taxY}), DO=({doX},{doY}), TaxDate=({taxDateX},{taxDateY}), DODate=({doDateX},{doDateY})");
                 }
             }
         }
@@ -2576,11 +2607,29 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             await Task.Delay(150, cancellationToken);
         }
 
-        // 3. เลขที่ใบส่งของ (Delivery Order No) with duplicate detection and auto /1, /2... retry
+        // 3. วันที่ใบกำกับ (Tax Invoice Date)
+        if (!string.IsNullOrWhiteSpace(vendorRow.TaxInvoiceDate))
+        {
+            string formattedTaxDate = CreditPurchaseDocDetector.NormalizeProsoftDate(vendorRow.TaxInvoiceDate);
+            FileLogger.Log($"[FillDocFields] Setting 'วันที่ใบกำกับ' = '{formattedTaxDate}' (raw='{vendorRow.TaxInvoiceDate}') at ({taxDateX}, {taxDateY})...");
+            await SetDateFieldTextSafeAsync(taxDateX, taxDateY, formattedTaxDate, cancellationToken, childHwnd);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 4. เลขที่ใบส่งของ (Delivery Order No) with duplicate detection and auto /1, /2... retry
         if (!string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderNumber))
         {
             FileLogger.Log($"[FillDocFields] Setting 'เลขที่ใบส่งของ' = '{vendorRow.DeliveryOrderNumber}' at ({doX}, {doY})...");
             await SetDeliveryOrderWithDuplicateHandlingAsync(process, childHwnd, doX, doY, vendorRow, progress, cancellationToken);
+            await Task.Delay(150, cancellationToken);
+        }
+
+        // 5. วันที่ใบส่งของ (Delivery Order Date)
+        if (!string.IsNullOrWhiteSpace(vendorRow.DeliveryOrderDate))
+        {
+            string formattedDoDate = CreditPurchaseDocDetector.NormalizeProsoftDate(vendorRow.DeliveryOrderDate);
+            FileLogger.Log($"[FillDocFields] Setting 'วันที่ใบส่งของ' = '{formattedDoDate}' (raw='{vendorRow.DeliveryOrderDate}') at ({doDateX}, {doDateY})...");
+            await SetDateFieldTextSafeAsync(doDateX, doDateY, formattedDoDate, cancellationToken, childHwnd);
             await Task.Delay(150, cancellationToken);
         }
 
@@ -2649,6 +2698,69 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         // 5. Set text via clipboard paste
         Win32Native.SetClipboardTextSafe(text);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
+        await Task.Delay(100, cancellationToken);
+
+        // 6. Commit to DataWindow buffer
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_TAB, cancellationToken);
+    }
+
+    private static async Task SetDateFieldTextSafeAsync(
+        int x,
+        int y,
+        string dateText,
+        CancellationToken cancellationToken,
+        IntPtr targetHwnd = default)
+    {
+        if (string.IsNullOrWhiteSpace(dateText)) return;
+
+        // 1. Ensure English keyboard layout so shortcut and navigation keys behave consistently
+        if (targetHwnd != IntPtr.Zero)
+        {
+            Win32Native.EnsureEnglishKeyboardLayout(targetHwnd);
+        }
+        else
+        {
+            Win32Native.EnsureEnglishKeyboardLayout(IntPtr.Zero);
+        }
+
+        // 2. Click inside date edit box
+        await Win32Native.ClickScreenPointAsync(x, y, cancellationToken);
+        await Task.Delay(80, cancellationToken);
+
+        // 3. Double-click inside box to select word/content in PowerBuilder
+        await Win32Native.DoubleClickScreenPointAsync(x, y, cancellationToken);
+        await Task.Delay(80, cancellationToken);
+
+        // 4. Clear existing content in EditMask
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_A, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_HOME, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+        await Win32Native.SendKeyCombinationAsync(Win32Native.VK_SHIFT, Win32Native.VK_END, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_DELETE, cancellationToken);
+        await Task.Delay(20, cancellationToken);
+
+        for (int i = 0; i < 10; i++)
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_BACK, cancellationToken);
+        }
+        for (int i = 0; i < 10; i++)
+        {
+            await Win32Native.SendKeyPressAsync(Win32Native.VK_DELETE, cancellationToken);
+        }
+        await Task.Delay(30, cancellationToken);
+
+        // Ensure caret is at position 0 before pasting
+        await Win32Native.SendKeyPressAsync(Win32Native.VK_HOME, cancellationToken);
+        await Task.Delay(30, cancellationToken);
+
+        // 5. Paste formatted date via clipboard
+        Win32Native.SetClipboardTextSafe(dateText);
         await Win32Native.SendKeyCombinationAsync(Win32Native.VK_CONTROL, Win32Native.VK_V, cancellationToken);
         await Task.Delay(100, cancellationToken);
 

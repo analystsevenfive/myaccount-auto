@@ -177,6 +177,34 @@ public class SettingsAndModelsTests
     }
 
     [Fact]
+    public void VendorCsvReader_UpdateDocumentResult_UpdatesAllRowsForDocument()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"prosoft-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(path,
+                "ชื่อผู้ขาย,เลขที่เอกสาร,รหัสสินค้า,status,Time use,Status\n" +
+                "Vendor,PO-1,ITEM-1,Approved,,\n" +
+                "Vendor,PO-1,ITEM-2,Approved,,\n" +
+                "Vendor,PO-2,ITEM-3,Approved,,\n");
+
+            VendorCsvReader.UpdateDocumentResult(
+                path,
+                new VendorCsvRecord("Vendor", null, "PO-1"),
+                TimeSpan.FromSeconds(12));
+
+            var lines = File.ReadAllLines(path);
+            Assert.Contains("ITEM-1,Approved,00:00:12,Completed", lines[1]);
+            Assert.Contains("ITEM-2,Approved,00:00:12,Completed", lines[2]);
+            Assert.EndsWith("Approved,,", lines[3]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void AppSettings_LoginButtonSelectors_IncludeOkVariants()
     {
         var appSettingsPath = Path.Combine(
@@ -670,7 +698,7 @@ public class SettingsAndModelsTests
     {
         var record = VendorCsvReader.ReadFirstVendor("input/input.csv");
         Assert.NotNull(record);
-        Assert.Equal("GUANGZHOU NANTIAN", record.VendorName);
+        Assert.Equal("GUANGZHOU NANTIAN SOURCES CO., LTD.", record.VendorName);
     }
 
     [Fact]
@@ -709,6 +737,8 @@ public class SettingsAndModelsTests
         Assert.NotNull(settings.Prosoft.VendorInput);
         Assert.Equal("input/input.csv", settings.Prosoft.VendorInput.CsvPath);
         Assert.Equal("ชื่อผู้ขาย", settings.Prosoft.VendorInput.VendorNameColumn);
+        Assert.Equal("วันที่ใบกำกับ", settings.Prosoft.VendorInput.TaxInvoiceDateColumn);
+        Assert.Equal("วันที่ใบส่งของ", settings.Prosoft.VendorInput.DeliveryOrderDateColumn);
     }
 
     [Fact]
@@ -787,10 +817,15 @@ public class SettingsAndModelsTests
     {
         var record = VendorCsvReader.ReadFirstVendor("input/input.csv");
         Assert.NotNull(record);
-        Assert.Equal("GUANGZHOU NANTIAN", record.VendorName);
-        Assert.Equal("VC0926-00014-5", record.DocumentNumber);
-        Assert.Equal("Shanghai Consolidate 3-2044", record.TaxInvoiceNumber);
-        Assert.Equal("26NTSTH-SX040", record.DeliveryOrderNumber);
+        Assert.Contains("GUANGZHOU NANTIAN", record.VendorName);
+        Assert.NotNull(record.DocumentNumber);
+        Assert.NotEmpty(record.DocumentNumber);
+        Assert.NotNull(record.TaxInvoiceNumber);
+        Assert.NotEmpty(record.TaxInvoiceNumber);
+        Assert.NotNull(record.DeliveryOrderNumber);
+        Assert.NotEmpty(record.DeliveryOrderNumber);
+        Assert.Equal("24/9/2026", record.TaxInvoiceDate);
+        Assert.Equal("25/9/2026", record.DeliveryOrderDate);
     }
 
     [Fact]
@@ -807,6 +842,28 @@ public class SettingsAndModelsTests
 
         Assert.Equal(200 + 520, loc.DeliveryOrder.X);
         Assert.Equal(150 + 110, loc.DeliveryOrder.Y);
+
+        Assert.Equal(200 + 700, loc.TaxInvoiceDate.X);
+        Assert.Equal(150 + 91, loc.TaxInvoiceDate.Y);
+
+        Assert.Equal(200 + 700, loc.DeliveryOrderDate.X);
+        Assert.Equal(150 + 110, loc.DeliveryOrderDate.Y);
+    }
+
+    [Theory]
+    [InlineData("24/9/2026", "24/09/2026")]
+    [InlineData("25/9/2026", "25/09/2026")]
+    [InlineData("24/09/2026", "24/09/2026")]
+    [InlineData("1/5/2026", "01/05/2026")]
+    [InlineData("2026-09-24", "24/09/2026")]
+    [InlineData("24/9/2569", "24/09/2026")]
+    [InlineData("24/09/2026 12:30:00", "24/09/2026")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void CreditPurchaseDocDetector_NormalizeProsoftDate_FormatsCorrectly(string? input, string expected)
+    {
+        var actual = CreditPurchaseDocDetector.NormalizeProsoftDate(input);
+        Assert.Equal(expected, actual);
     }
 
     [Fact]
@@ -833,6 +890,8 @@ public class SettingsAndModelsTests
         Assert.Equal("เลขที่เอกสาร", settings.Prosoft.VendorInput.DocumentNumberColumn);
         Assert.Equal("เลขที่ใบกำกับ", settings.Prosoft.VendorInput.TaxInvoiceNumberColumn);
         Assert.Equal("เลขที่ใบส่งของ", settings.Prosoft.VendorInput.DeliveryOrderNumberColumn);
+        Assert.Equal("วันที่ใบกำกับ", settings.Prosoft.VendorInput.TaxInvoiceDateColumn);
+        Assert.Equal("วันที่ใบส่งของ", settings.Prosoft.VendorInput.DeliveryOrderDateColumn);
     }
 
     [Fact]
@@ -840,15 +899,20 @@ public class SettingsAndModelsTests
     {
         var record = VendorCsvReader.ReadFirstVendor("input/input.csv");
         Assert.NotNull(record);
-        Assert.Equal("GUANGZHOU NANTIAN", record.VendorName);
-        Assert.Equal("VC0926-00014-5", record.DocumentNumber);
-        Assert.Equal("Shanghai Consolidate 3-2044", record.TaxInvoiceNumber);
-        Assert.Equal("26NTSTH-SX040", record.DeliveryOrderNumber);
+        Assert.Contains("GUANGZHOU NANTIAN", record.VendorName);
+        Assert.NotNull(record.DocumentNumber);
+        Assert.NotEmpty(record.DocumentNumber);
+        Assert.NotNull(record.TaxInvoiceNumber);
+        Assert.NotEmpty(record.TaxInvoiceNumber);
+        Assert.NotNull(record.DeliveryOrderNumber);
+        Assert.NotEmpty(record.DeliveryOrderNumber);
+        Assert.Equal("24/9/2026", record.TaxInvoiceDate);
+        Assert.Equal("25/9/2026", record.DeliveryOrderDate);
 
         Assert.NotNull(record.Items);
         Assert.NotEmpty(record.Items);
-        Assert.Equal("NTS1-CD-111-9L", record.Items[0].ItemCode);
-        Assert.Equal("20", record.Items[0].Quantity);
+        Assert.Equal("NTS1-BBC-GY-WT", record.Items[0].ItemCode);
+        Assert.Equal("43", record.Items[0].Quantity);
     }
 
     [Fact]

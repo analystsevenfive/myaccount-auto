@@ -33,10 +33,10 @@ public partial class MainWindow : Window
         var password = PasswordInput.Password;
         var profile = ProfileInput.Text?.Trim();
 
-        SetBusy(true);
         _loginCancellation = new CancellationTokenSource();
+        SetBusy(true);
 
-        FileLogger.Log($"[UI] กด Login Prosoft: Profile={profile}, User={username}, PasswordProvided={!string.IsNullOrWhiteSpace(password)}, OpenCreditPurchase={OpenCreditPurchaseCheckBox.IsChecked}");
+        FileLogger.Log("[UI] กด Login Prosoft");
 
         var progress = new Progress<string>(message =>
         {
@@ -256,7 +256,7 @@ public partial class MainWindow : Window
         FillVendorButton.IsEnabled = !isBusy;
         ProcessGlButton.IsEnabled = !isBusy;
         ExportButton.IsEnabled = !isBusy;
-        CancelButton.IsEnabled = isBusy && _loginCancellation is not null;
+        CancelButton.IsEnabled = isBusy && _loginCancellation is not null && !_loginCancellation.IsCancellationRequested;
         PasswordInput.IsEnabled = !isBusy;
         UsernameInput.IsEnabled = !isBusy;
         ProfileInput.IsEnabled = !isBusy;

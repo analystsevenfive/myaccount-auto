@@ -26,6 +26,8 @@ public sealed class VendorInputOptions
     public string DocumentNumberColumn { get; set; } = "เลขที่เอกสาร";
     public string TaxInvoiceNumberColumn { get; set; } = "เลขที่ใบกำกับ";
     public string DeliveryOrderNumberColumn { get; set; } = "เลขที่ใบส่งของ";
+    public string TaxInvoiceDateColumn { get; set; } = "วันที่ใบกำกับ";
+    public string DeliveryOrderDateColumn { get; set; } = "วันที่ใบส่งของ";
     public string ItemCodeColumn { get; set; } = "รหัสสินค้า";
     public string QuantityColumn { get; set; } = "จำนวน";
     public string UnitPriceColumn { get; set; } = "ราคาต่อหน่วย";
