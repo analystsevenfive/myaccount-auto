@@ -21,6 +21,24 @@ internal static class CreditPurchaseDetailDetector
     public const int HeaderBottomOffset = 181;
     public const int FirstRowCenterOffset = 187;
     public const int RowPitch = 16;
+    public const int VisibleRowCount = 7;
+
+    public static int GetViewportRowIndex(int documentRowIndex)
+    {
+        return Math.Clamp(documentRowIndex, 1, VisibleRowCount);
+    }
+
+    public static int GetViewportRowAfterItemCodeCommit(int documentRowIndex)
+    {
+        if (documentRowIndex < VisibleRowCount)
+        {
+            return GetViewportRowIndex(documentRowIndex);
+        }
+
+        // PowerBuilder appends a blank row and scrolls immediately after the item code
+        // is committed on the last visible row. The row being edited then moves up one.
+        return VisibleRowCount - 1;
+    }
 
     /// <summary>
     /// Gets the click point for the "Detail" tab at the bottom of the "ซื้อเชื่อ" window.

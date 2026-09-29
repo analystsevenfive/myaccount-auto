@@ -82,8 +82,6 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 }
 
                 progress?.Report("เข้าสู่ระบบเรียบร้อย กำลังเปิดหน้าซื้อเชื่อ (PO Data Entry)...");
-                await Task.Delay(800, cancellationToken);
-
                 var navResult = await NavigateToCreditPurchaseCoreAsync(progress, cancellationToken);
                 if (!navResult.IsSuccess)
                 {
@@ -96,8 +94,6 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 }
 
                 progress?.Report("เปิดหน้าซื้อเชื่อเรียบร้อย กำลังกรอกรหัสผู้ขายจาก CSV...");
-                await Task.Delay(800, cancellationToken);
-
                 var vendorResult = await FillVendorFromCsvCoreAsync(null, progress, cancellationToken);
                 if (vendorResult.IsSuccess)
                 {
@@ -394,19 +390,15 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             catch { }
         }
 
-        var deadline = DateTime.UtcNow.AddSeconds(_options.AttachTimeoutSeconds);
+        var process = await AutomationWait.UntilNotNullAsync(
+            FindCurrentProcess,
+            TimeSpan.FromSeconds(_options.AttachTimeoutSeconds),
+            GetPollInterval(),
+            cancellationToken);
 
-        while (DateTime.UtcNow < deadline)
+        if (process is not null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var process = FindCurrentProcess();
-            if (process is not null)
-            {
-                return process;
-            }
-
-            await Task.Delay(_options.PollIntervalMilliseconds, cancellationToken);
+            return process;
         }
 
         throw new InvalidOperationException(
@@ -444,12 +436,8 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         UIA3Automation automation,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(_options.AttachTimeoutSeconds);
-
-        while (DateTime.UtcNow < deadline)
+        Window? Probe()
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             var windows = GetProcessWindows(process, application, automation);
 
             // 1. Prefer a window that contains the password field (true login window)
@@ -492,7 +480,18 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 return candidate;
             }
 
-            await Task.Delay(_options.PollIntervalMilliseconds, cancellationToken);
+            return null;
+        }
+
+        var window = await AutomationWait.UntilNotNullAsync(
+            Probe,
+            TimeSpan.FromSeconds(_options.AttachTimeoutSeconds),
+            GetPollInterval(),
+            cancellationToken);
+
+        if (window is not null)
+        {
+            return window;
         }
 
         throw new InvalidOperationException(
@@ -1428,12 +1427,8 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         UIA3Automation automation,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(_options.AttachTimeoutSeconds);
-
-        while (DateTime.UtcNow < deadline)
+        Window? Probe()
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             var windows = GetProcessWindows(process, application, automation);
 
             // 1. Main window matching SuccessWindowTitleContains, "บริษัท", or FNWND380 without password field
@@ -1459,7 +1454,18 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 return candidate;
             }
 
-            await Task.Delay(_options.PollIntervalMilliseconds, cancellationToken);
+            return null;
+        }
+
+        var window = await AutomationWait.UntilNotNullAsync(
+            Probe,
+            TimeSpan.FromSeconds(_options.AttachTimeoutSeconds),
+            GetPollInterval(),
+            cancellationToken);
+
+        if (window is not null)
+        {
+            return window;
         }
 
         var anyWindows = GetProcessWindows(process, application, automation);
@@ -1470,6 +1476,11 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
 
         throw new InvalidOperationException(
             "ไม่พบหน้าต่างหลักของ Prosoft กรุณาตรวจสอบว่าโปรแกรม Prosoft ได้ Login เข้าสู่ระบบเรียบร้อยแล้ว");
+    }
+
+    private TimeSpan GetPollInterval()
+    {
+        return TimeSpan.FromMilliseconds(Math.Clamp(_options.PollIntervalMilliseconds, 50, 1000));
     }
 
     private static AutomationElement? FindElementByCandidates(
@@ -1883,23 +1894,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
                 deliveryOrderDateColumn: vOptions.DeliveryOrderDateColumn);
 
             totalDocCount = allDocs.Count;
-            approvedDocs = VendorCsvReader.ReadApprovedDocuments(
-                filePath: effectivePath,
-                requiredStatus: vOptions.RequiredStatus,
-                statusColumn: vOptions.StatusColumn,
-                nameColumn: vOptions.VendorNameColumn,
-                codeColumn: vOptions.VendorCodeColumn,
-                docNoColumn: vOptions.DocumentNumberColumn,
-                taxInvoiceColumn: vOptions.TaxInvoiceNumberColumn,
-                deliveryOrderColumn: vOptions.DeliveryOrderNumberColumn,
-                itemCodeColumn: vOptions.ItemCodeColumn,
-                quantityColumn: vOptions.QuantityColumn,
-                unitPriceColumn: vOptions.UnitPriceColumn,
-                warehouseColumn: vOptions.WarehouseColumn,
-                locationColumn: vOptions.LocationColumn,
-                discountColumn: vOptions.DiscountColumn,
-                taxInvoiceDateColumn: vOptions.TaxInvoiceDateColumn,
-                deliveryOrderDateColumn: vOptions.DeliveryOrderDateColumn);
+            approvedDocs = VendorCsvReader.FilterApprovedDocuments(allDocs, vOptions.RequiredStatus);
         }
         catch (Exception ex)
         {
@@ -1945,7 +1940,6 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             {
                 return VendorFillResult.Error($"ไม่สามารถเปิดหน้าซื้อเชื่อได้: {navResult.Message}");
             }
-            await Task.Delay(800, cancellationToken);
         }
 
         // Step 2: Locate Credit Purchase MDI child window
@@ -2194,14 +2188,13 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var start = DateTime.UtcNow;
-        while (DateTime.UtcNow - start < timeout)
-        {
-            var dlg = FindVendorSearchDialogHwnd(process);
-            if (dlg != IntPtr.Zero) return dlg;
-            await Task.Delay(150, cancellationToken);
-        }
-        return IntPtr.Zero;
+        var dialog = IntPtr.Zero;
+        await AutomationWait.UntilAsync(
+            () => (dialog = FindVendorSearchDialogHwnd(process)) != IntPtr.Zero,
+            timeout,
+            TimeSpan.FromMilliseconds(100),
+            cancellationToken);
+        return dialog;
     }
 
     private async Task EnsureNewDocumentModeAsync(
@@ -3270,14 +3263,21 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             var item = items[i - 1];
             var wh = !string.IsNullOrWhiteSpace(item.Warehouse) ? item.Warehouse : (_options.VendorInput.DefaultWarehouse ?? "BK");
             var loc = !string.IsNullOrWhiteSpace(item.Location) ? item.Location : (_options.VendorInput.DefaultLocation ?? "BKW");
+            var itemCodeViewportRow = CreditPurchaseDetailDetector.GetViewportRowIndex(i);
+            var remainingFieldsViewportRow = !string.IsNullOrWhiteSpace(item.ItemCode)
+                ? CreditPurchaseDetailDetector.GetViewportRowAfterItemCodeCommit(i)
+                : itemCodeViewportRow;
 
-            FileLogger.Log($"[FillDetailItems] Row {i}/{items.Count}: ItemCode='{item.ItemCode}', WH='{wh}', Loc='{loc}', Qty='{item.Quantity}', Price='{item.UnitPrice}'");
+            FileLogger.Log(
+                $"[FillDetailItems] Row {i}/{items.Count} " +
+                $"(item viewport {itemCodeViewportRow}, remaining viewport {remainingFieldsViewportRow}): " +
+                $"ItemCode='{item.ItemCode}', WH='{wh}', Loc='{loc}', Qty='{item.Quantity}', Price='{item.UnitPrice}'");
             Report(progress, $"กำลังกรอกสินค้าแถวที่ {i}/{items.Count}: '{item.ItemCode}' (คลัง: {wh}, ที่เก็บ: {loc})...");
 
             // 1. Item Code (รหัสสินค้า)
             if (!string.IsNullOrWhiteSpace(item.ItemCode))
             {
-                var ptCode = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.ItemCode);
+                var ptCode = CreditPurchaseDetailDetector.GetCellLocation(childRect, itemCodeViewportRow, DetailColumn.ItemCode);
                 FileLogger.Log($"[FillDetailItems] Setting ItemCode '{item.ItemCode}' at ({ptCode.X}, {ptCode.Y})...");
                 await SetFieldTextSafeAsync(ptCode.X, ptCode.Y, item.ItemCode, cancellationToken);
                 await Task.Delay(200, cancellationToken);
@@ -3286,7 +3286,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             // 2. Warehouse (คลัง) - default "BK"
             if (!string.IsNullOrWhiteSpace(wh))
             {
-                var ptWh = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Warehouse);
+                var ptWh = CreditPurchaseDetailDetector.GetCellLocation(childRect, remainingFieldsViewportRow, DetailColumn.Warehouse);
                 FileLogger.Log($"[FillDetailItems] Setting Warehouse '{wh}' at ({ptWh.X}, {ptWh.Y})...");
                 await SetFieldTextSafeAsync(ptWh.X, ptWh.Y, wh, cancellationToken);
                 await Task.Delay(150, cancellationToken);
@@ -3295,7 +3295,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             // 3. Location (ที่เก็บ) - default "BKW"
             if (!string.IsNullOrWhiteSpace(loc))
             {
-                var ptLoc = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Location);
+                var ptLoc = CreditPurchaseDetailDetector.GetCellLocation(childRect, remainingFieldsViewportRow, DetailColumn.Location);
                 FileLogger.Log($"[FillDetailItems] Setting Location '{loc}' at ({ptLoc.X}, {ptLoc.Y})...");
                 await SetFieldTextSafeAsync(ptLoc.X, ptLoc.Y, loc, cancellationToken);
                 await Task.Delay(150, cancellationToken);
@@ -3304,7 +3304,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             // 3. Quantity (จำนวน) - if specified
             if (!string.IsNullOrWhiteSpace(item.Quantity))
             {
-                var ptQty = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Quantity);
+                var ptQty = CreditPurchaseDetailDetector.GetCellLocation(childRect, remainingFieldsViewportRow, DetailColumn.Quantity);
                 FileLogger.Log($"[FillDetailItems] Setting Quantity '{item.Quantity}' at ({ptQty.X}, {ptQty.Y})...");
                 await SetFieldTextSafeAsync(ptQty.X, ptQty.Y, item.Quantity, cancellationToken);
                 await Task.Delay(150, cancellationToken);
@@ -3313,7 +3313,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             // 4. Unit Price (ราคาต่อหน่วย) - if specified
             if (!string.IsNullOrWhiteSpace(item.UnitPrice))
             {
-                var ptPrice = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.UnitPrice);
+                var ptPrice = CreditPurchaseDetailDetector.GetCellLocation(childRect, remainingFieldsViewportRow, DetailColumn.UnitPrice);
                 FileLogger.Log($"[FillDetailItems] Setting UnitPrice '{item.UnitPrice}' at ({ptPrice.X}, {ptPrice.Y})...");
                 await SetFieldTextSafeAsync(ptPrice.X, ptPrice.Y, item.UnitPrice, cancellationToken);
                 await Task.Delay(150, cancellationToken);
@@ -3322,7 +3322,7 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
             // 5. Discount (ส่วนลด) - if specified
             if (!string.IsNullOrWhiteSpace(item.Discount))
             {
-                var ptDisc = CreditPurchaseDetailDetector.GetCellLocation(childRect, i, DetailColumn.Discount);
+                var ptDisc = CreditPurchaseDetailDetector.GetCellLocation(childRect, remainingFieldsViewportRow, DetailColumn.Discount);
                 FileLogger.Log($"[FillDetailItems] Setting Discount '{item.Discount}' at ({ptDisc.X}, {ptDisc.Y})...");
                 await SetFieldTextSafeAsync(ptDisc.X, ptDisc.Y, item.Discount, cancellationToken);
                 await Task.Delay(150, cancellationToken);
@@ -3528,14 +3528,13 @@ public sealed class ProsoftAutomationService : IProsoftAutomationService
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var start = DateTime.UtcNow;
-        while (DateTime.UtcNow - start < timeout)
-        {
-            var dlg = FindTaxSearchDialogHwnd(process);
-            if (dlg != IntPtr.Zero) return dlg;
-            await Task.Delay(150, cancellationToken);
-        }
-        return IntPtr.Zero;
+        var dialog = IntPtr.Zero;
+        await AutomationWait.UntilAsync(
+            () => (dialog = FindTaxSearchDialogHwnd(process)) != IntPtr.Zero,
+            timeout,
+            TimeSpan.FromMilliseconds(100),
+            cancellationToken);
+        return dialog;
     }
 
     private bool IsFindVendorDialog(IntPtr hwnd, int processId)

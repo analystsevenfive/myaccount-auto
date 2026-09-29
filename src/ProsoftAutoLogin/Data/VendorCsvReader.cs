@@ -436,12 +436,21 @@ public static class VendorCsvReader
             taxInvoiceDateColumn,
             deliveryOrderDateColumn);
 
+        return FilterApprovedDocuments(all, requiredStatus);
+    }
+
+    public static List<VendorCsvRecord> FilterApprovedDocuments(
+        IEnumerable<VendorCsvRecord> documents,
+        string requiredStatus = "Approved")
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+
         if (string.IsNullOrWhiteSpace(requiredStatus))
         {
-            return all;
+            return documents.ToList();
         }
 
-        return all.Where(d =>
+        return documents.Where(d =>
             string.Equals(d.Status?.Trim(), requiredStatus.Trim(), StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(d.ResultStatus?.Trim(), "Completed", StringComparison.OrdinalIgnoreCase)
         ).ToList();

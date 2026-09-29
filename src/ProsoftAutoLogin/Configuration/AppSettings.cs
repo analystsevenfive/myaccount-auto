@@ -67,7 +67,7 @@ public sealed class ProsoftOptions
 
     public int ResultTimeoutSeconds { get; set; } = 15;
 
-    public int PollIntervalMilliseconds { get; set; } = 300;
+    public int PollIntervalMilliseconds { get; set; } = 150;
 
     public NavigationOptions Navigation { get; set; } = new();
 
